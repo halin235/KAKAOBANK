@@ -70,7 +70,7 @@ const MILKY_WAY_PARTICLES = Array.from({ length: 42 }, (_, index) => ({
 }));
 
 const FORTUNE_KEYWORD = "작은 루틴이 큰 별이 되는 날";
-const ANNUAL_INTEREST_RATE = 0.018;
+const ANNUAL_INTEREST_RATE = 0.045;
 
 const DEMO_PROFILE = {
   name: "하린",
@@ -80,40 +80,150 @@ const DEMO_PROFILE = {
   amount: 33333,
 };
 
-const SAJU_CURATION_RULES = [
-  {
-    day_pillar: "임진",
-    monthly_flow: "이동수",
-    risk_signal: "사고",
-    recommendation_code: "oneday-insurance",
-    productName: "원데이 안심 보험",
-    benefit: "룰렛 당첨 기념 첫날 보험료 50% 캐시백",
+/**
+ * 60甲子 배열 (index 0 = 갑자, index 59 = 계해)
+ * 천간(갑을병정무기경신임계) × 지지(자축인묘진사오미신유술해)
+ */
+const SIXTY_GANJI = [
+  "갑자", "을축", "병인", "정묘", "무진", "기사", "경오", "신미", "임신", "계유", // 0–9
+  "갑술", "을해", "병자", "정축", "무인", "기묘", "경진", "신사", "임오", "계미", // 10–19
+  "갑신", "을유", "병술", "정해", "무자", "기축", "경인", "신묘", "임진", "계사", // 20–29
+  "갑오", "을미", "병신", "정유", "무술", "기해", "경자", "신축", "임인", "계묘", // 30–39
+  "갑진", "을사", "병오", "정미", "무신", "기유", "경술", "신해", "임자", "계축", // 40–49
+  "갑인", "을묘", "병진", "정사", "무오", "기미", "경신", "신유", "임술", "계해", // 50–59
+] as const;
+
+type GanjiName = typeof SIXTY_GANJI[number];
+type CurationCase = "A" | "B" | "C";
+
+/**
+ * 3가지 큐레이션 케이스 기본 데이터
+ * A: 재물운 상승  B: 지출 관리  C: 안정 지향
+ */
+const CURATION_CASES = {
+  A: {
+    label: "재물운 상승",
+    description: "재물을 키우는",
+    fortune: "기운이 좋습니다! 목돈을 굴릴 타이밍이에요. 적극적인 저축이 빛을 발하는 시기입니다.",
+    monthly_flow: "재물 상승",
+    risk_signal: "과도한 투자",
+    productName: "공모주 적립 펀드",
+    recommendation_code: "ipo-savings-fund",
+    benefit: "첫 달 수수료 100% 면제 + 공모주 우선 배정",
+    rate: "수익률 시장 연동",
+    period: "6개월 이상",
   },
-  {
-    day_pillar: "갑오",
+  B: {
+    label: "지출 관리",
+    description: "지출을 다스리는",
+    fortune: "예상치 못한 지출(경조사·이동수)이 보입니다. 미리 비상금을 쌓아두는 것이 현명해요.",
     monthly_flow: "지출 변동",
-    risk_signal: "충동 소비",
-    recommendation_code: "spending-guard",
-    productName: "소비 알림 세이프박스",
-    benefit: "이번 달 변동 지출 리포트 무료 제공",
-  },
-  {
-    day_pillar: "정유",
-    monthly_flow: "관계 확장",
     risk_signal: "경조사비",
-    recommendation_code: "event-savings",
-    productName: "경조사 준비 저금통",
-    benefit: "목표 금액 자동 쪼개기 설정 제공",
+    productName: "비상금 저금통",
+    recommendation_code: "emergency-savings",
+    benefit: "목표 달성 시 금리 우대 +0.5%",
+    rate: "기본 연 2.0% + 우대 +0.5%",
+    period: "목표 달성까지 자유",
   },
-  {
-    day_pillar: "계묘",
-    monthly_flow: "재정 정리",
+  C: {
+    label: "안정 지향",
+    description: "안정적인",
+    fortune: "지금은 지키는 것이 이득입니다. 꾸준한 납입으로 안전하게 자산을 불려가세요.",
+    monthly_flow: "재정 안정",
     risk_signal: "고정비 누수",
-    recommendation_code: "fixed-cost-check",
-    productName: "고정비 점검 리포트",
-    benefit: "구독료/통신비 절감 항목 자동 분석",
+    productName: "6개월 정기예금",
+    recommendation_code: "term-deposit-6m",
+    benefit: "연 4.5% 확정금리 · 만기 시 자동 갱신",
+    rate: "연 4.5% 확정",
+    period: "6개월 고정",
   },
-];
+} as const;
+
+
+/**
+ * 60甲子 일주별 맞춤 큐레이션 (총 60개 완전 매핑)
+ * Case 배정 근거: A=재성(財星) 강 · B=비겁(比劫) 강 · C=인성(印星) 강
+ * message / product 는 일주별 커스텀값. 미입력 시 CURATION_CASES 기본값 사용.
+ */
+type IljuEntry = {
+  case: CurationCase;
+  fortune: string;
+  message?: string;
+  product?: string;
+};
+const ILJU_OVERRIDES: Record<GanjiName, IljuEntry> = {
+  // ── 0번대 (갑자~계유) ──────────────────────────────────────────────────
+  갑자: { case: "A", fortune: "갑목의 강한 생기가 자수를 만나 재물이 흘러듭니다. 지금이 저축을 시작할 최적기예요." },
+  을축: { case: "B", fortune: "을목이 축토에 뿌리내리며 안정을 추구합니다. 예상 지출을 대비한 비상금 마련이 중요해요." },
+  병인: { case: "A", fortune: "병화의 열정이 인목에 불을 지펴 강한 재물운이 흐릅니다. 목표를 크게 잡아도 좋은 시기예요." },
+  정묘: { case: "C", fortune: "등불이 숲을 밝히니 지식이 재산이 되는 시기입니다. 꾸준한 기록과 학습이 미래 자산을 만들어요." },
+  무진: { case: "A", fortune: "댐이 물을 가두듯 진토 속 수(水) 재성이 재물을 품습니다. 적극적 저축이 빛을 발할 시점이에요." },
+  기사: { case: "C", fortune: "대지가 태양을 받아 서서히 익어가는 형국입니다. 인성(火)의 힘으로 꾸준히 쌓아가는 것이 답이에요." },
+  경오: { case: "C", fortune: "강철이 용광로를 거쳐 새롭게 태어나는 기운입니다. 인성(土)을 바탕으로 내실을 다질 최적기예요." },
+  신미: { case: "C", fortune: "가을 들녘에서 곡식을 갈무리하듯 미토(未土) 인성이 빛납니다. 차분히 모아가는 것이 최선이에요." },
+  임신: { case: "C", fortune: "깊은 강이 금을 품듯 신금(申金) 인성이 내면의 자산을 키웁니다. 안정형 저축으로 기반을 다지세요." },
+  계유: { case: "C", fortune: "고요한 물이 보석을 품듯 유금(酉金) 인성이 조용히 가치를 쌓아줍니다. 정기예금으로 지키세요." },
+
+  // ── 10번대 (갑술~계미) ─────────────────────────────────────────────────
+  갑술: { case: "A", fortune: "마른 땅에 단비가 내리듯 재물이 들어옵니다. 술토(戌土) 재성을 살려 적극적으로 저축을 시작하세요!" },
+  을해: { case: "C", fortune: "바다 위에 뜬 나무처럼 유연한 흐름이 보입니다. 해수(亥水) 인성의 힘으로 꾸준한 기록이 자산이 돼요." },
+  병자: { case: "B", fortune: "태양이 호수를 비추니 시선이 집중되는 날입니다. 자수(子水) 비겁이 지출을 부르니 세이프박스로 대비하세요." },
+  정축: { case: "C", fortune: "따뜻한 등불이 창고를 비추는 격입니다. 축토 인성을 바탕으로 차곡차곡 모으는 재미를 느껴보세요." },
+  무인: { case: "A", fortune: "산속의 호랑이가 기지개를 켜는 기운입니다. 인목(寅木) 재성이 왕성하니 과감한 목표 설정이 필요해요." },
+  기묘: { case: "B", fortune: "들판의 토끼처럼 분주하게 움직이는 운입니다. 묘목(卯木) 관살이 지출을 부르니 비상금을 먼저 채우세요." },
+  경진: { case: "A", fortune: "금색 용이 여의주를 얻는 강력한 운세입니다. 진토(辰土) 속 재성이 흘러드니 큰 자산을 굴릴 준비를 하세요." },
+  신사: { case: "C", fortune: "보석이 불을 만나 빛나는 형국입니다. 사화(巳火)의 인성이 자기 계발의 동력이 되니 꾸준히 쌓아가세요." },
+  임오: { case: "B", fortune: "강물이 말을 타고 달리는 격동의 기운입니다. 오화(午火) 재성도 있지만 비겁 기운이 강해 지출 관리가 먼저예요." },
+  계미: { case: "C", fortune: "대지에 비가 내려 만물을 적시는 날입니다. 미토(未土)의 인성 기운으로 편안한 마음으로 적금액을 유지하세요." },
+
+  // ── 20번대 (갑신~계사) ─────────────────────────────────────────────────
+  갑신: { case: "C", fortune: "큰 나무가 맑은 샘물을 마시듯 지혜가 재산이 됩니다. 신금(申金) 인성을 살려 안정적 자산을 쌓아가세요." },
+  을유: { case: "B", fortune: "유연한 덩굴이 날카로운 칼을 만난 형국입니다. 유금(酉金) 관살 기운이 강해 지출에 주의가 필요해요." },
+  병술: { case: "A", fortune: "태양이 창고를 비추니 술토(戌土) 안의 재물이 빛을 발합니다. 숨겨진 재성을 적극적인 저축으로 살려내세요." },
+  정해: { case: "C", fortune: "따뜻한 불꽃이 깊은 물을 만나 지혜가 싹트는 시기입니다. 해목(亥木) 인성으로 배움에 투자할 최적기예요." },
+  무자: { case: "A", fortune: "산이 강물을 품으니 자수(子水) 재성이 자연스레 모여드는 기운입니다. 지금 저축을 늘릴 절호의 타이밍이에요." },
+  기축: { case: "B", fortune: "부드러운 흙이 창고에 쌓이니 축토(丑土) 비겁 기운이 지출을 부릅니다. 지출 관리를 먼저 잡아야 해요." },
+  경인: { case: "A", fortune: "도끼가 숲을 만나니 인목(寅木) 재성이 풍부한 왕성한 운세입니다. 과감하게 저축 목표를 높여보세요." },
+  신묘: { case: "A", fortune: "빛나는 보석이 나무 숲에서 발견되는 재물의 기운입니다. 묘목(卯木) 재성을 살려 적극적으로 자산을 키우세요." },
+  임진: { case: "B", fortune: "임수가 진토에 갇혀 이동과 변동의 기운이 강합니다. 예상치 못한 지출을 꼭 대비해두세요." },
+  계사: { case: "A", fortune: "차가운 빗물이 따뜻한 연못을 만나 생기 넘치는 재물운입니다. 사화(巳火) 재성을 살려 적극 저축하세요." },
+
+  // ── 30번대 (갑오~계묘) ─────────────────────────────────────────────────
+  갑오: { case: "A", fortune: "갑목이 오화 위에 서서 강렬한 재물운을 뿜습니다. 적극적인 투자와 저축 모두 빛나는 시기예요." },
+  을미: { case: "A", fortune: "유연한 덩굴이 비옥한 땅을 만나 재물이 뻗어납니다. 미토(未土) 재성을 살려 저축 목표를 높여보세요." },
+  병신: { case: "A", fortune: "태양이 광산을 비추니 신금(申金) 재성이 드러납니다. 숨겨진 재물을 공격적인 저축으로 확보하세요." },
+  정유: { case: "B", fortune: "관계 확장이 많아 경조사비를 조심해야 하네요.", message: "룰렛 당첨 기념으로 경조사 준비 저금통 혜택을 확인해보세요.", product: "경조사 준비 저금통" },
+  무술: { case: "C", fortune: "무토가 술토와 만나 이중 방어막이 형성됩니다. 지키는 저축으로 탄탄한 기반을 쌓을 시기예요." },
+  기해: { case: "C", fortune: "기토가 해수를 품어 내면에 에너지를 저장합니다. 안전한 정기예금으로 내실을 다질 때입니다." },
+  경자: { case: "B", fortune: "날카로운 금이 물 위에 뜨니 유동성이 크고 지출이 잦습니다. 자수(子水) 식상 기운을 비상금으로 잡아두세요." },
+  신축: { case: "C", fortune: "정제된 보석이 창고에 쌓이듯 꾸준한 축적이 빛납니다. 축토(丑土) 인성을 바탕으로 안정형 예금을 추천해요." },
+  임인: { case: "A", fortune: "강물이 숲을 지나며 재물을 실어 나르는 왕성한 운세입니다. 인목(寅木) 식상에서 재성이 나오니 지금이 기회예요." },
+  계묘: { case: "C", fortune: "계수가 묘목을 키워내며 조용한 성장을 이룹니다. 꾸준한 정기예금으로 장기 자산을 키워가세요." },
+
+  // ── 40번대 (갑진~계축) ─────────────────────────────────────────────────
+  갑진: { case: "A", fortune: "큰 나무가 용의 땅에 뿌리내리니 진토(辰土) 재성이 깊게 자리합니다. 지금 저축을 늘릴 최적 타이밍이에요." },
+  을사: { case: "A", fortune: "부드러운 나무가 따뜻한 불빛 아래 재물을 탐하는 운세입니다. 사토(巳土) 재성을 살려 적극적으로 모아가세요." },
+  병오: { case: "B", fortune: "두 태양이 만나니 에너지는 넘치나 지출이 과할 수 있습니다. 비겁(比劫)이 강하니 비상금 저금통이 필수예요." },
+  정미: { case: "B", fortune: "작은 등불이 넓은 들에 서니 비겁(比劫)으로 지출이 사방으로 흩어집니다. 지출 통제를 먼저 실천하세요." },
+  무신: { case: "A", fortune: "큰 산이 금맥을 품으니 신금(申金) 식상에서 재성(水)이 흐릅니다. 재물 운기가 가득한 저축의 시기예요." },
+  기유: { case: "B", fortune: "부드러운 흙이 보석을 다듬으니 유금(酉金) 식상 기운이 강합니다. 쓸수록 줄어드니 비상금 저금통이 먼저예요." },
+  경술: { case: "C", fortune: "강인한 금이 창고에 쌓이니 술토(戌土) 인성이 빛납니다. 인내하며 꾸준히 쌓는 정기예금이 가장 잘 맞아요." },
+  신해: { case: "A", fortune: "빛나는 보석이 깊은 물속 나무를 만나 재물이 흘러듭니다. 해목(亥木) 재성을 살려 목표를 크게 잡아보세요." },
+  임자: { case: "B", fortune: "강이 바다를 만나 흘러나가니 자수(子水) 비겁이 지출을 부릅니다. 나가는 돈을 비상금으로 먼저 잡아두세요." },
+  계축: { case: "C", fortune: "빗물이 창고에 고이듯 축금(丑金) 인성이 조용히 자산을 쌓아줍니다. 꾸준한 정기예금으로 미래를 준비하세요." },
+
+  // ── 50번대 (갑인~계해) ─────────────────────────────────────────────────
+  갑인: { case: "B", fortune: "두 나무가 겹치는 형국, 비겁(比劫)이 강해 경쟁과 지출이 많아집니다. 비상금 저금통으로 먼저 방어하세요." },
+  을묘: { case: "B", fortune: "부드러운 덩굴이 숲을 이루니 비겁(比劫) 기운으로 지출이 넓어집니다. 지출 관리를 최우선으로 하세요." },
+  병진: { case: "C", fortune: "태양이 용의 창고를 비추니 진수(辰水) 인성 기운이 지식을 쌓아줍니다. 배움에 투자하는 것이 최고의 저축이에요." },
+  정사: { case: "A", fortune: "등불이 뜨거운 연못을 비추니 사금(巳金) 재성이 드러납니다. 숨은 재물 기운을 공모주 펀드로 살려보세요." },
+  무오: { case: "C", fortune: "산이 태양을 품으니 오화(午火) 인성 기운이 따뜻하게 성장을 돕습니다. 꾸준한 납입이 최고의 전략이에요." },
+  기미: { case: "C", fortune: "기름진 땅이 여름 햇살을 받아 무르익는 성장의 시기입니다. 인성(火)의 힘으로 꾸준히 자산을 쌓아가세요." },
+  경신: { case: "A", fortune: "경금이 신금을 만나 날카로운 결단력이 재물을 불러옵니다. 과감한 저축 결정을 내릴 시점이에요." },
+  신유: { case: "B", fortune: "두 보석이 맞부딪히니 날카롭지만 비겁(比劫) 기운으로 지출이 쉽게 나갑니다. 비상금 저금통을 꼭 활용하세요." },
+  임술: { case: "A", fortune: "강물이 창고를 비추니 술화(戌火) 재성이 감춰진 재물을 드러냅니다. 지금이 적극적 저축의 적기예요." },
+  계해: { case: "B", fortune: "빗물이 바다로 돌아가니 해수(亥水) 비겁 기운으로 지출이 흘러나갑니다. 나가는 돈을 꼭 잡아두세요." },
+};
 
 const RETENTION_METRICS = [
   { label: "1개월", value: 82, color: "bg-cyan-300" },
@@ -140,6 +250,18 @@ const ROULETTE_BURST_PARTICLES = Array.from({ length: 28 }, (_, index) => {
   };
 });
 
+// 가입 세레모니: 별이 흩어진 위치에서 성좌 노드로 수렴하는 애니메이션 초기 오프셋 (px)
+const CEREMONY_SCATTER_OFFSETS = [
+  { dx: -90, dy: -70 },
+  { dx:  75, dy: -90 },
+  { dx: -110, dy:  10 },
+  { dx:  100, dy: -20 },
+  { dx: -55,  dy:  80 },
+  { dx:  95,  dy:  65 },
+  { dx: -35,  dy:  95 },
+  { dx:  60,  dy: -50 },
+] as const;
+
 // 금액 표기는 금융 서비스 신뢰도에 직접 영향을 주므로 전 화면에서 동일한 포맷을 사용합니다.
 const formatWon = (amount: number) => `${amount.toLocaleString("ko-KR")}원`;
 
@@ -156,33 +278,106 @@ const getRouletteCardIndex = (amount: number) =>
     ),
   );
 
-const getSajuSeed = (birthDate: string) =>
-  birthDate
-    .replaceAll("-", "")
-    .split("")
-    .reduce((sum, value) => sum + Number(value), 0);
+/**
+ * 일일 납입 적금 만기 수령액 계산 (연 복리 없이 단순 적금 이자식)
+ * 이자 = 일납입액 × (연금리/365) × Σ(잔여일수) = 일납입액 × (연금리/365) × n(n-1)/2
+ */
+const calcDailySavings = (dailyAmount: number) => {
+  const days = 180;
+  const principal = dailyAmount * days;
+  const interest = Math.round(
+    dailyAmount * (ANNUAL_INTEREST_RATE / 365) * ((days * (days - 1)) / 2),
+  );
+  return { principal, interest };
+};
+
+function CountUp({ target, duration = 500 }: { target: number; duration?: number }) {
+  const [current, setCurrent] = useState(0);
+
+  useEffect(() => {
+    if (target === 0) {
+      setCurrent(0);
+      return;
+    }
+    let animId: number;
+    const start = performance.now();
+    const tick = (now: number) => {
+      const t = Math.min((now - start) / duration, 1);
+      const eased = 1 - Math.pow(1 - t, 3);
+      setCurrent(Math.round(eased * target));
+      if (t < 1) animId = requestAnimationFrame(tick);
+    };
+    animId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(animId);
+  }, [target, duration]);
+
+  return <>{current.toLocaleString("ko-KR")}원</>;
+}
+
+/**
+ * 그레고리력 생년월일 → 일주(60갑자) 계산
+ * Julian Day Number(JDN)를 이용한 전통 만세력 방식.
+ * offset 49는 한국 전통 사주 기준 甲子 기준일 보정값입니다.
+ */
+const calcDayPillar = (birthDate: string): GanjiName => {
+  const [y, m, d] = birthDate.split("-").map(Number);
+  const a = Math.floor((14 - m) / 12);
+  const yr = y + 4800 - a;
+  const mo = m + 12 * a - 3;
+  const jdn =
+    d +
+    Math.floor((153 * mo + 2) / 5) +
+    365 * yr +
+    Math.floor(yr / 4) -
+    Math.floor(yr / 100) +
+    Math.floor(yr / 400) -
+    32045;
+  return SIXTY_GANJI[(jdn + 49) % 60];
+};
+
+/** 일주에 해당하는 큐레이션 데이터를 반환 (60개 일주 전체 커버) */
+const getIljuCuration = (dayPillar: GanjiName) => {
+  const { case: caseKey, fortune, message, product } = ILJU_OVERRIDES[dayPillar];
+  const base = CURATION_CASES[caseKey];
+  return {
+    curationCase: caseKey,
+    fortune,
+    customMessage: message,
+    caseDescription: base.description,
+    productName: product ?? base.productName,
+    monthly_flow: base.monthly_flow,
+    risk_signal: base.risk_signal,
+    recommendation_code: base.recommendation_code,
+    benefit: base.benefit,
+    rate: base.rate,
+    period: base.period,
+  };
+};
 
 const getSajuData = (birthDate: string): NonNullable<UserProfile["birth_info"]["saju"]> => {
-  const rule = SAJU_CURATION_RULES[getSajuSeed(birthDate) % SAJU_CURATION_RULES.length];
-
-  return {
-    day_pillar: rule.day_pillar,
-    monthly_flow: rule.monthly_flow,
-    risk_signal: rule.risk_signal,
-    recommendation_code: rule.recommendation_code,
-  };
+  const dayPillar = calcDayPillar(birthDate);
+  const { monthly_flow, risk_signal, recommendation_code } = getIljuCuration(dayPillar);
+  return { day_pillar: dayPillar, monthly_flow, risk_signal, recommendation_code };
 };
 
 const getFortuneCuration = (birthInfo: UserProfile["birth_info"]) => {
   const saju = birthInfo.saju ?? getSajuData(birthInfo.birth_date);
-  const rule =
-    SAJU_CURATION_RULES.find((item) => item.recommendation_code === saju.recommendation_code) ??
-    SAJU_CURATION_RULES[0];
-
+  const dayPillar = saju.day_pillar as GanjiName;
+  const { curationCase, fortune, productName, benefit, customMessage, caseDescription, rate, period } =
+    getIljuCuration(dayPillar);
+  const sajuScore = 85 + (SIXTY_GANJI.indexOf(dayPillar) * 7 + 13) % 15;
   return {
-    title: rule.productName,
-    benefit: rule.benefit,
-    message: `${birthInfo.name}님(${saju.day_pillar} 일주), 이번 달은 ${saju.monthly_flow}가 많아 ${saju.risk_signal}를 조심해야 하네요. 룰렛 당첨 기념으로 ${rule.productName} 혜택을 확인해보세요.`,
+    title: productName,
+    benefit,
+    fortune,
+    curationCase,
+    dayPillar,
+    rate,
+    period,
+    sajuScore,
+    message:
+      customMessage ??
+      `${birthInfo.name}님(${dayPillar} 일주), 이번 달은 ${saju.monthly_flow}가 많아 ${saju.risk_signal}를 조심해야 하네요. 그래서 ${dayPillar} 일주의 ${caseDescription} 기운을 지켜줄 ${productName}을 준비했어요.`,
   };
 };
 
@@ -194,6 +389,9 @@ export default function Home() {
   const [gender, setGender] = useState(DEMO_PROFILE.gender);
   const [unknownBirthTime, setUnknownBirthTime] = useState(false);
   const [selectedAmount, setSelectedAmount] = useState<number | null>(DEMO_PROFILE.amount);
+  const [hasResult, setHasResult] = useState(false);
+  const [pendingProfile, setPendingProfile] = useState<UserProfile | null>(null);
+  const [showCeremony, setShowCeremony] = useState(false);
   const [isRecommending, setIsRecommending] = useState(false);
   const [fortuneMessage, setFortuneMessage] = useState("");
   const [resultBurstKey, setResultBurstKey] = useState(0);
@@ -221,6 +419,7 @@ export default function Home() {
     }
 
     setIsRecommending(true);
+    setHasResult(false);
     setFortuneMessage("");
 
     const generatedAmount =
@@ -253,6 +452,7 @@ export default function Home() {
     setSelectedAmount(generatedAmount);
     setFortuneMessage(`${name.trim() || "하린"}님의 오늘 행운 금액: ${formatWon(generatedAmount)}`);
     setResultBurstKey((current) => current + 1);
+    setHasResult(true);
     setIsRecommending(false);
   };
 
@@ -278,11 +478,27 @@ export default function Home() {
       joinedProfile.birth_info.birth_time = birthTime;
     }
 
-    setProfile(joinedProfile);
+    // 세레모니 화면을 먼저 보여주고, 완료 후 대시보드로 이동합니다.
+    setPendingProfile(joinedProfile);
+    setShowCeremony(true);
   };
 
   if (showAdmin) {
     return <AdminDashboard onBack={() => setShowAdmin(false)} />;
+  }
+
+  if (showCeremony && pendingProfile) {
+    return (
+      <JoinCeremony
+        name={pendingProfile.birth_info.name}
+        dayPillar={pendingProfile.birth_info.saju?.day_pillar ?? "갑자"}
+        onDismiss={() => {
+          setProfile(pendingProfile);
+          setPendingProfile(null);
+          setShowCeremony(false);
+        }}
+      />
+    );
   }
 
   if (profile) {
@@ -507,7 +723,9 @@ export default function Home() {
                       }}
                     >
                       <p className="text-xs font-black text-kakao-yellow">행운 금액</p>
-                      <p className="mt-1 text-2xl font-black">{formatWon(selectedAmount)}</p>
+                      <p className="mt-1 text-2xl font-black text-kakao-yellow">
+                        <CountUp key={`burst-${resultBurstKey}`} target={selectedAmount} duration={800} />
+                      </p>
                     </motion.div>
                   </motion.div>
                 ) : null}
@@ -540,9 +758,72 @@ export default function Home() {
                 ))}
               </div>
             </div>
-            <p className="mt-3 text-center text-sm font-semibold text-white/65">
-              {fortuneMessage || (selectedAmount ? `하린님의 오늘 행운 금액: ${formatWon(selectedAmount)}` : "룰렛을 돌려보세요")}
-            </p>
+            <AnimatePresence mode="wait">
+              {hasResult && selectedAmount ? (
+                <motion.p
+                  key="result-label"
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 6 }}
+                  transition={{ duration: 0.35 }}
+                  className="mt-3 text-center text-sm text-white/65"
+                >
+                  {name.trim() || "하린"}님의 오늘 행운 금액:{" "}
+                  <span className="font-black text-kakao-yellow">
+                    <CountUp key={`label-${resultBurstKey}`} target={selectedAmount} duration={800} />
+                  </span>
+                </motion.p>
+              ) : (
+                <motion.p
+                  key="idle-label"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.25 }}
+                  className="mt-3 text-center text-sm font-semibold text-white/30"
+                >
+                  {isRecommending ? "운명을 읽는 중..." : "룰렛을 돌려보세요"}
+                </motion.p>
+              )}
+            </AnimatePresence>
+
+            <AnimatePresence>
+              {hasResult && selectedAmount ? (() => {
+                const { principal, interest } = calcDailySavings(selectedAmount);
+                return (
+                  <motion.div
+                    key={`savings-${selectedAmount}`}
+                    initial={{ opacity: 0, y: 14 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 8 }}
+                    transition={{ duration: 0.45, delay: 0.3, ease: "easeOut" }}
+                    className="mt-4 rounded-2xl border border-white/10 bg-white/5 px-5 py-4"
+                  >
+                    <p className="mb-3 text-center text-[11px] font-medium text-white/45">
+                      매일 {formatWon(selectedAmount)} × 180일 납입 시 (연 4.5%, 세전)
+                    </p>
+                    <div className="flex items-center justify-center gap-4">
+                      <div className="text-center">
+                        <p className="text-[10px] uppercase tracking-widest text-white/35">예상 원금</p>
+                        <p className="mt-1 text-base font-black text-white">
+                          <CountUp key={`principal-${selectedAmount}`} target={principal} />
+                        </p>
+                      </div>
+                      <div className="text-xl font-light text-white/25">+</div>
+                      <div className="text-center">
+                        <p className="text-[10px] uppercase tracking-widest text-kakao-yellow/60">이자 (세전)</p>
+                        <p className="mt-1 text-base font-black text-kakao-yellow">
+                          <CountUp key={`interest-${selectedAmount}`} target={interest} />
+                        </p>
+                      </div>
+                    </div>
+                    <p className="mt-3 text-center text-[10px] text-white/25">
+                      6개월 만기 예상 수령액 · 세전 · 단리 기준
+                    </p>
+                  </motion.div>
+                );
+              })() : null}
+            </AnimatePresence>
           </div>
 
         </section>
@@ -566,61 +847,237 @@ export default function Home() {
   );
 }
 
-// 실제 이동 대신 팝업으로 처리해 포트폴리오 데모 안에서 금융 상품 연결 의도를 보여줍니다.
-function ProductDetailModal({
+// 상품 핵심 요약 바텀 시트 — 아래서 위로 슬라이드하며 사주 궁합 점수를 위트 있게 노출합니다.
+function ProductBottomSheet({
   curation,
   onClose,
 }: {
   curation: ReturnType<typeof getFortuneCuration>;
   onClose: () => void;
 }) {
+  const caseColor =
+    curation.curationCase === "A"
+      ? { bg: "bg-emerald-50", text: "text-emerald-600", ring: "ring-emerald-200" }
+      : curation.curationCase === "B"
+        ? { bg: "bg-amber-50", text: "text-amber-600", ring: "ring-amber-200" }
+        : { bg: "bg-violet-50", text: "text-violet-600", ring: "ring-violet-200" };
+
   return (
     <motion.div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 px-5 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-end bg-black/50 backdrop-blur-sm"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
+      onClick={onClose}
     >
       <motion.section
-        initial={{ opacity: 0, y: 24, scale: 0.96 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={{ opacity: 0, y: 16, scale: 0.97 }}
-        transition={{ duration: 0.25 }}
-        className="w-full max-w-sm overflow-hidden rounded-[32px] bg-white text-kakao-black shadow-2xl"
+        initial={{ y: "100%" }}
+        animate={{ y: 0 }}
+        exit={{ y: "100%" }}
+        transition={{ type: "spring", stiffness: 320, damping: 32, mass: 0.9 }}
+        className="w-full rounded-t-[32px] bg-white pb-8 text-kakao-black shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
       >
-        <div className="bg-[#070B1E] p-5 text-white">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-xs font-black uppercase tracking-[0.18em] text-kakao-yellow">
-                Demo Product Detail
-              </p>
-              <h2 className="mt-2 text-2xl font-black">{curation.title}</h2>
-            </div>
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-full bg-white/10 p-2 transition active:scale-95"
-            >
-              <X size={18} />
-            </button>
-          </div>
+        {/* 드래그 핸들 */}
+        <div className="flex justify-center pt-3 pb-1">
+          <div className="h-1 w-10 rounded-full bg-neutral-200" />
         </div>
 
-        <div className="p-5">
-          <p className="text-sm leading-6 text-neutral-600">{curation.message}</p>
-          <div className="mt-4 rounded-3xl bg-kakao-gray p-4">
-            <p className="text-xs font-black text-neutral-500">포트폴리오 데모 혜택</p>
-            <p className="mt-2 text-lg font-black">{curation.benefit}</p>
+        {/* 헤더 */}
+        <div className="flex items-start justify-between gap-4 px-6 pt-3 pb-4 border-b border-neutral-100">
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-widest text-neutral-400">
+              상품 핵심 요약
+            </p>
+            <h2 className="mt-1 text-2xl font-black">{curation.title}</h2>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="mt-5 w-full rounded-2xl bg-kakao-yellow px-4 py-4 font-black transition active:scale-[0.99]"
+            className="mt-1 rounded-full bg-neutral-100 p-2 transition active:scale-95"
           >
-            데모 확인 완료
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="px-6 pt-5 space-y-4">
+          {/* 핵심 스펙 3종 */}
+          <div className="grid grid-cols-3 gap-3">
+            <div className="rounded-2xl bg-kakao-gray p-3 text-center">
+              <p className="text-[10px] font-bold text-neutral-400">금리</p>
+              <p className="mt-1 text-sm font-black leading-tight text-kakao-black">{curation.rate}</p>
+            </div>
+            <div className="rounded-2xl bg-kakao-gray p-3 text-center">
+              <p className="text-[10px] font-bold text-neutral-400">기간</p>
+              <p className="mt-1 text-sm font-black leading-tight text-kakao-black">{curation.period}</p>
+            </div>
+            {/* 사주 궁합 점수 */}
+            <div className={`rounded-2xl p-3 text-center ring-1 ${caseColor.bg} ${caseColor.ring}`}>
+              <p className="text-[10px] font-bold text-neutral-400">사주 궁합</p>
+              <p className={`mt-1 text-sm font-black leading-tight ${caseColor.text}`}>
+                {curation.sajuScore}점 ✨
+              </p>
+            </div>
+          </div>
+
+          {/* 혜택 강조 */}
+          <div className="rounded-2xl bg-[#FFFBE6] px-4 py-3 ring-1 ring-kakao-yellow/40">
+            <p className="text-[10px] font-bold text-yellow-600">가입 혜택</p>
+            <p className="mt-1 font-black text-kakao-black">{curation.benefit}</p>
+          </div>
+
+          {/* 개인화 설명 */}
+          <p className="text-sm leading-6 text-neutral-500">{curation.message}</p>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-full rounded-2xl bg-kakao-yellow px-4 py-4 font-black transition active:scale-[0.99]"
+          >
+            확인했어요
           </button>
         </div>
       </motion.section>
+    </motion.div>
+  );
+}
+
+// 가입 완료 축하 세레모니: 흩어진 별이 유저의 일주 성좌로 수렴하며 점등됩니다.
+function JoinCeremony({
+  name,
+  dayPillar,
+  onDismiss,
+}: {
+  name: string;
+  dayPillar: string;
+  onDismiss: () => void;
+}) {
+  const [phase, setPhase] = useState<"enter" | "exit">("enter");
+
+  const dismiss = () => {
+    if (phase === "enter") setPhase("exit");
+  };
+
+  useEffect(() => {
+    const t = window.setTimeout(dismiss, 2400);
+    return () => window.clearTimeout(t);
+  // dismiss는 렌더마다 새로 만들어지지 않도록 phase만 의존
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const W = 224, H = 160;
+
+  return (
+    <motion.div
+      className="fixed inset-0 z-50 flex flex-col items-center justify-center overflow-hidden bg-[#070B1E] cursor-pointer select-none"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: phase === "exit" ? 0 : 1 }}
+      transition={{ duration: phase === "exit" ? 0.55 : 0.42 }}
+      onAnimationComplete={() => { if (phase === "exit") onDismiss(); }}
+      onClick={dismiss}
+    >
+      {/* 배경 환경 별 */}
+      <div className="pointer-events-none absolute inset-0">
+        {MILKY_WAY_PARTICLES.slice(0, 24).map((p) => (
+          <motion.span
+            key={p.id}
+            className="absolute rounded-full bg-white"
+            style={{ left: `${p.left}%`, top: `${p.top}%`, width: 2, height: 2 }}
+            animate={{ opacity: [0.08, 0.45, 0.08] }}
+            transition={{ duration: p.duration, delay: p.delay, repeat: Infinity, ease: "easeInOut" }}
+          />
+        ))}
+      </div>
+
+      <div className="relative z-10 flex flex-col items-center gap-7 px-8 text-center">
+        {/* 축하 메시지 */}
+        <motion.div
+          initial={{ opacity: 0, y: 18 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.48, delay: 0.18 }}
+        >
+          <p className="text-[10px] font-black uppercase tracking-[0.22em] text-kakao-yellow/70">
+            ✨ 가입 완료
+          </p>
+          <h2 className="mt-2 text-2xl font-black leading-snug text-white">
+            {name}님만의 별자리가<br />생성되었습니다!
+          </h2>
+          <p className="mt-1.5 text-sm text-white/40">{dayPillar} 일주의 성좌가 빛납니다</p>
+        </motion.div>
+
+        {/* 성좌 애니메이션: scatter → converge → glow */}
+        <div className="relative" style={{ width: W, height: H }}>
+          {/* 선 레이어 */}
+          <svg className="absolute inset-0" width={W} height={H} viewBox={`0 0 ${W} ${H}`} aria-hidden>
+            {CONSTELLATION_NODES.slice(1).map((node, i) => {
+              const prev = CONSTELLATION_NODES[i];
+              return (
+                <motion.line
+                  key={`seq-${i}`}
+                  x1={(prev.x / 100) * W} y1={(prev.y / 100) * H}
+                  x2={(node.x / 100) * W} y2={(node.y / 100) * H}
+                  stroke="rgba(254,229,0,0.5)" strokeWidth="0.8"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: 0.22, delay: 0.95 + i * 0.08 }}
+                />
+              );
+            })}
+            {CONSTELLATION_EXTRA_EDGES.map(([a, b], i) => {
+              const nA = CONSTELLATION_NODES[a], nB = CONSTELLATION_NODES[b];
+              return (
+                <motion.line
+                  key={`ex-${i}`}
+                  x1={(nA.x / 100) * W} y1={(nA.y / 100) * H}
+                  x2={(nB.x / 100) * W} y2={(nB.y / 100) * H}
+                  stroke="rgba(254,229,0,0.25)" strokeWidth="0.5"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: 0.2, delay: 1.45 + i * 0.06 }}
+                />
+              );
+            })}
+          </svg>
+
+          {/* 별 레이어: 흩어진 위치에서 각 노드로 수렴 */}
+          {CONSTELLATION_NODES.map((node, i) => {
+            const scatter = CEREMONY_SCATTER_OFFSETS[i];
+            const finalLeft = (node.x / 100) * W - node.size / 2;
+            const finalTop  = (node.y / 100) * H - node.size / 2;
+            return (
+              <motion.div
+                key={node.id}
+                className="absolute rounded-full"
+                style={{
+                  width: node.size,
+                  height: node.size,
+                  left: finalLeft,
+                  top: finalTop,
+                  background: "radial-gradient(circle, #fee500 30%, #f59e0b)",
+                  boxShadow: "0 0 8px 2px rgba(254,229,0,0.65)",
+                }}
+                initial={{ x: scatter.dx, y: scatter.dy, scale: 0, opacity: 0 }}
+                animate={{
+                  x: 0, y: 0,
+                  scale: [0, 0.7, 1.35, 1],
+                  opacity: 1,
+                }}
+                transition={{ duration: 0.52, delay: 0.28 + i * 0.09, ease: "easeOut" }}
+              />
+            );
+          })}
+        </div>
+
+        {/* 스킵 힌트 */}
+        <motion.p
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 1.9 }}
+          className="text-xs text-white/22"
+        >
+          화면을 탭하면 바로 시작할 수 있어요
+        </motion.p>
+      </div>
     </motion.div>
   );
 }
@@ -638,6 +1095,7 @@ function Dashboard({
   const [toastMessage, setToastMessage] = useState<string>(
     REWARD_STAGE_MESSAGES[INITIAL_SAVING_STEP],
   );
+  const [showBanner, setShowBanner] = useState(true);
   const [showFinale, setShowFinale] = useState(false);
   const [showReport, setShowReport] = useState(false);
   const [shareFormat, setShareFormat] = useState<"story" | "feed">("story");
@@ -670,6 +1128,12 @@ function Dashboard({
 
     setShowFinale(false);
   }, [rewardStage]);
+
+  useEffect(() => {
+    setShowBanner(true);
+    const bannerTimer = window.setTimeout(() => setShowBanner(false), 4000);
+    return () => window.clearTimeout(bannerTimer);
+  }, [toastMessage]);
 
   // 유저의 심리적 보상을 극대화하기 위해 저축 행동을 즉시 별 생성 애니메이션으로 연결합니다.
   const handleSave = () => {
@@ -1059,46 +1523,109 @@ function Dashboard({
         <motion.section
           initial={{ opacity: 0, y: 42 }}
           whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true, amount: 0.35 }}
+          viewport={{ once: true, amount: 0.3 }}
           transition={{ duration: 0.46, ease: "easeOut" }}
           className="relative mt-5 overflow-hidden rounded-[28px] border border-white/20 bg-white/10 p-5 text-white shadow-[0_18px_45px_rgba(7,11,30,0.22)] backdrop-blur-xl"
         >
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_10%,rgba(254,229,0,0.22),transparent_28%),radial-gradient(circle_at_90%_20%,rgba(165,243,252,0.2),transparent_30%)]" />
           <div className="relative">
-            <div className="mb-4 flex items-center justify-between gap-3">
+            {/* 헤더: 섹션 레이블 + 배지 */}
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ duration: 0.35, delay: 0.1 }}
+              className="mb-4 flex items-start justify-between gap-3"
+            >
               <div>
-                <p className="text-xs font-black uppercase tracking-[0.18em] text-kakao-yellow">
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-kakao-yellow/80">
                   Fortune-Based Curation
                 </p>
-                <h3 className="mt-1 text-xl font-black">사주 기반 금융 큐레이션</h3>
+                <h3 className="mt-1 text-xl font-black leading-tight">오늘의 기운에 딱 맞는 저축 추천</h3>
               </div>
-              <span className="rounded-full bg-white/10 px-3 py-1.5 text-xs font-bold text-white/70">
-                {profile.birth_info.saju?.day_pillar ?? getSajuData(profile.birth_info.birth_date).day_pillar} 일주
-              </span>
-            </div>
+              <div className="flex flex-col items-end gap-2">
+                {/* 일주 배지 — KakaoBank pill 스타일 */}
+                <span className="rounded-full border border-white/20 bg-white/[0.08] px-3 py-1 text-[13px] font-extrabold tracking-tight text-white">
+                  {curation.dayPillar} 일주
+                </span>
+                {/* 케이스 배지 */}
+                <span
+                  className={[
+                    "rounded-full px-2.5 py-1 text-[10px] font-bold tracking-wide",
+                    curation.curationCase === "A"
+                      ? "bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/25"
+                      : curation.curationCase === "B"
+                        ? "bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/25"
+                        : "bg-violet-500/15 text-violet-300 ring-1 ring-violet-500/25",
+                  ].join(" ")}
+                >
+                  {CURATION_CASES[curation.curationCase].label}
+                </span>
+              </div>
+            </motion.div>
 
-            <p className="text-sm leading-6 text-white/75">{curation.message}</p>
+            {/* 재물운 문구 */}
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ duration: 0.38, delay: 0.22 }}
+              className="mb-4 rounded-2xl border border-white/10 bg-white/5 px-4 py-3"
+            >
+              <p className="mb-1 text-[10px] font-black uppercase tracking-widest text-white/35">
+                오늘의 재물운
+              </p>
+              <p className="text-sm font-semibold leading-6 text-white/85">
+                {curation.fortune}
+              </p>
+            </motion.div>
 
-            <div className="mt-4 rounded-3xl border border-white/15 bg-white/10 p-4 backdrop-blur">
-              <p className="text-xs font-bold text-white/55">추천 상품</p>
-              <div className="mt-2 flex items-end justify-between gap-3">
-                <div>
-                  <p className="text-2xl font-black">{curation.title}</p>
-                  <p className="mt-1 text-sm font-semibold text-kakao-yellow">
+            {/* 큐레이션 메시지 */}
+            <motion.p
+              initial={{ opacity: 0 }}
+              whileInView={{ opacity: 1 }}
+              viewport={{ once: true }}
+              transition={{ duration: 0.35, delay: 0.32 }}
+              className="mb-4 text-sm leading-6 text-white/55"
+            >
+              {curation.message}
+            </motion.p>
+
+            {/* 추천 상품 카드 */}
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ duration: 0.38, delay: 0.42 }}
+              className="rounded-3xl border border-white/15 bg-white/10 p-4 backdrop-blur"
+            >
+              <p className="text-[10px] font-bold uppercase tracking-widest text-white/40">추천 상품</p>
+              <div className="mt-2 flex items-start justify-between gap-3">
+                <div className="flex-1">
+                  <p className="text-xl font-black leading-tight">{curation.title}</p>
+                  {/* 금리 — 카카오 시그니처 옐로우 강조 */}
+                  <p className="mt-1.5 text-base font-black text-kakao-yellow">
+                    {curation.rate}
+                  </p>
+                  <p className="mt-1 text-xs font-semibold text-white/45">
                     {curation.benefit}
                   </p>
                 </div>
-                <ShieldCheck className="shrink-0 text-kakao-yellow" size={30} />
+                <ShieldCheck className="mt-0.5 shrink-0 text-kakao-yellow" size={28} />
               </div>
-            </div>
+            </motion.div>
 
-            <button
+            <motion.button
+              initial={{ opacity: 0 }}
+              whileInView={{ opacity: 1 }}
+              viewport={{ once: true }}
+              transition={{ duration: 0.3, delay: 0.52 }}
               type="button"
               onClick={() => setShowProductModal(true)}
               className="mt-4 w-full rounded-2xl bg-kakao-yellow px-4 py-4 font-black text-kakao-black transition active:scale-[0.99]"
             >
               상품 상세 보기
-            </button>
+            </motion.button>
           </div>
         </motion.section>
 
@@ -1119,17 +1646,19 @@ function Dashboard({
         }}
       />
 
-      <AnimatePresence mode="wait">
-        <motion.div
-          key={toastMessage}
-          initial={{ opacity: 0, y: -16, scale: 0.96 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: -12, scale: 0.98 }}
-          transition={{ duration: 0.28 }}
-          className="fixed inset-x-5 top-5 z-40 mx-auto max-w-md rounded-3xl border border-white/20 bg-white/90 p-4 text-sm font-bold leading-6 text-kakao-black shadow-2xl backdrop-blur"
-        >
-          {toastMessage}
-        </motion.div>
+      <AnimatePresence>
+        {showBanner ? (
+          <motion.div
+            key={toastMessage}
+            initial={{ opacity: 0, y: -16, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -20, transition: { duration: 0.5 } }}
+            transition={{ duration: 0.28 }}
+            className="fixed inset-x-5 top-5 z-40 mx-auto max-w-md rounded-3xl border border-white/20 bg-white/90 p-4 text-sm font-bold leading-6 text-kakao-black shadow-2xl backdrop-blur"
+          >
+            {toastMessage}
+          </motion.div>
+        ) : null}
       </AnimatePresence>
 
       <AnimatePresence>
@@ -1154,7 +1683,7 @@ function Dashboard({
       </AnimatePresence>
       <AnimatePresence>
         {showProductModal ? (
-          <ProductDetailModal curation={curation} onClose={() => setShowProductModal(false)} />
+          <ProductBottomSheet curation={curation} onClose={() => setShowProductModal(false)} />
         ) : null}
       </AnimatePresence>
     </motion.main>

@@ -1,92 +1,104 @@
-# 별자리 적금
+# 별자리 적금 ✨
+### Constellation Savings — Hyper-Context Finance, Powered by Saju
 
-> 나의 운세가 쌓이는 만큼, 나의 자산도 쌓인다.
+> 당신의 사주(四柱)가 오늘의 저축 금액을 결정합니다.  
+> 생년월일로 계산한 **60갑자 일주**에 맞는 금융 상품을 실시간으로 큐레이션하는 카카오뱅크 스타일 적금 서비스입니다.
 
-별자리 적금은 저축을 단순한 금융 행동이 아니라 매일 확인하고 싶은 성장 경험으로 바꾸는 모바일 금융 MVP입니다. 사용자가 행운 금액을 정하고 저축할 때마다 밤하늘에 별이 생기며, 6개월 동안의 유지 행동이 하나의 은하계로 완성됩니다.
+---
 
-## Service Concept
+## 📌 Service Intro
 
-이 프로젝트는 적금 상품의 핵심 문제를 "가입"이 아니라 "유지"로 정의했습니다. 기존 적금은 금리, 만기, 납입 조건 중심으로 설명되지만, 사용자가 매일 저축을 반복하게 만드는 감정적 보상은 부족합니다.
+**별자리 적금**은 전통 명리학의 일주(日柱) 계산 로직과 현대 금융 상품 추천을 결합한 **하이퍼-콘텍스트(Hyper-Context) 적금 서비스**입니다.
 
-별자리 적금은 운세, 별자리, 단계별 보상, 공유 카드라는 익숙한 소비자 경험을 금융 유지 행동에 결합했습니다. 사용자는 돈을 모으는 동시에 자신의 성좌를 완성하며, 만기에는 최종 리포트와 전설의 황금 스킨을 받습니다.
+단순한 이율 비교를 넘어, 유저의 생년월일로 60갑자 일주를 산출하고  
+그 일주의 재물운(재성·비겁·인성) 성향에 따라 맞춤형 저축 상품을 연결합니다.  
+룰렛으로 '행운의 금액'을 뽑고, 가입이 완료되면 밤하늘에 나만의 성좌가 점등됩니다.
 
-## Key Features
+---
 
-- Onboarding: 이름, 생년월일, 태어난 시간, 성별, 저축 금액을 입력받고 PRD 기준 8가지 행운 금액을 선택합니다.
-- Lucky Amount Roulette: 랜덤 추천 버튼으로 7,777원부터 99,999원까지의 금액 중 하나를 애니메이션으로 추천합니다.
-- Constellation System: Framer Motion으로 별 생성 Pop, 선 Drawing, Ambient Sparkle을 구현했습니다.
-- Reward Evolution: 3단계에는 입체 성좌, 5단계에는 오로라와 파스텔 UI, 8단계에는 Grand Finale 화이트아웃과 은하계 완성을 제공합니다.
-- Daily Fortune: 오늘의 재물운 키워드를 노출하고 상세 풀이는 토글로 열리게 설계했습니다.
-- Share Card System: 현재 성좌, 운세 키워드, 저축 회차를 조합한 9:16 스토리와 1:1 피드용 카드를 이미지로 저장할 수 있습니다.
-- Maturity Report: 6개월 총 저축액, 예상 이자, 완성 은하계, 전설의 황금 스킨, 개인화 소액 투자 오퍼를 제공합니다.
-- Portfolio Time Machine: 제출용 데모에서 1단계부터 8단계까지 즉시 이동해 전체 보상 구조를 빠르게 확인할 수 있습니다.
-- Admin View: PM 관점의 성공 지표를 Mock Data로 시각화해 서비스화 이후의 운영 구조까지 보여줍니다.
+## ✨ Key Features
 
-## Tech Stack & Architecture
+### 1. 만세력 기반 60갑자 일주 금융 큐레이션
+- 율리우스 적일(Julian Day Number) 알고리즘으로 생년월일 → 60갑자 일주를 정밀 계산
+- 갑자·을축·병인… 모든 60개 일주에 **재성(A) / 비겁(B) / 인성(C)** 케이스 매핑
+- 케이스별 추천 상품: 공모주 적립 펀드 / 비상금 저금통 / 정기예금
+- 개인화 메시지 + **사주 궁합 점수**가 포함된 바텀시트 상품 상세 카드
 
-- Framework: Next.js App Router
-- Language: TypeScript
-- UI: React, Tailwind CSS
-- Animation: Framer Motion, CSS Keyframes
-- Icons: Lucide React
-- Image Export: html-to-image
-- Deployment Target: Vercel 또는 Netlify
+### 2. 룰렛 기반 행운 저축 금액 추천
+- 룰렛 회전 → 금액 확정 시 **황금 파티클 버스트** 오버레이 애니메이션
+- 확정 금액: `0원 → 목표금액`까지 **0.8초 카운팅(CountUp)** + Ease-Out 효과
+- 카카오뱅크 시그니처 옐로우(`#FEE500`)로 금액 강조
+- 연 4.5% 기준 **6개월 만기 예상 원금 + 이자(세전)** 자동 계산 및 표시
 
-데이터 구조는 실제 서비스 확장을 고려해 `UserProfile.birth_info`를 JSONB 저장이 가능한 형태로 구성했습니다. 유저의 기본 정보와 운세 계산에 필요한 입력값을 하나의 structured object로 유지해, 향후 Supabase나 PostgreSQL 기반 저장소로 자연스럽게 확장할 수 있습니다.
+### 3. 가입 완료 성좌 점등 세레모니 (Delight UI)
+- '가입하기' 클릭 시 즉각 대시보드로 이동하지 않고 **전환 축하 화면** 노출
+- 어두운 우주 배경 위로 흩어진 별(Particle)들이 유저의 일주 성좌 모양으로 **수렴·점등**
+- Framer Motion `scatter → converge → glow` 3단계 시퀀셜 애니메이션
+- 화면 탭 또는 2.4초 경과 시 페이드아웃 → 대시보드 전환 (스킵 가능)
 
-핵심 상태는 온보딩, 대시보드, 만기 리포트, Admin View로 나뉩니다. MVP 단계에서는 단일 페이지 상태 전환으로 빠르게 검증하되, 화면 경계는 컴포넌트 단위로 분리해 추후 라우팅 전환이 쉽도록 설계했습니다.
+### 4. 대시보드 사주 큐레이션 섹션
+- 일주 배지 + 케이스 배지 + 개인화 재물운 메시지 표시
+- 추천 상품 카드: 금리 강조(옐로우) + '상품 상세 보기' → 바텀시트 슬라이드업
+- 사주 궁합 점수, 가입 혜택, 적용 기간 한눈에 확인
 
-## Data-Driven Insight
+### 5. 대시보드 보상 시스템
+- 저축 진척도에 따라 별자리가 단계별로 점등
+- 적립 현황, 연속 저축일, 다음 보상까지 남은 금액 실시간 표시
+- 상단 배너 자동 4초 페이드아웃 (메모리 리크 방지 포함)
 
-이 MVP의 North Star Metric은 "가입 기간별 상품 유지율"입니다. 금융 상품의 성패는 가입 직후 전환보다 1개월, 3개월, 6개월 동안 얼마나 유지되는지에 달려 있기 때문입니다.
+---
 
-- Retention: 1개월, 3개월, 6개월 유지율을 추적해 단계별 보상 플랜이 실제 유지 행동을 만드는지 검증합니다.
-- K-Factor: 공유 카드 클릭 수, 유입 채널별 전환율, 신규 가입 기여도를 함께 추적해 바이럴 루프의 효율을 확인합니다.
-- CTR: 만기 리포트 하단의 "재물운 상승세 기반 소액 투자 제안" 클릭률을 측정해 교차 판매 가능성을 판단합니다.
-- Counter Metric: 중도 해지 의도와 해지 방어 팝업 노출 이후 잔존율을 추적해 과도한 게임화가 이탈을 유발하지 않는지 점검합니다.
+## 🛠 Tech Stack
 
-## Demo Flow
+| Category | Stack |
+|----------|-------|
+| **Framework** | [Next.js 14](https://nextjs.org/) (App Router) |
+| **Language** | TypeScript |
+| **Styling** | [Tailwind CSS](https://tailwindcss.com/) (커스텀 카카오뱅크 팔레트) |
+| **Animation** | [Framer Motion](https://www.framer.com/motion/) |
+| **State** | React `useState` / `useEffect` / `useMemo` / `useRef` |
+| **Algorithm** | Julian Day Number → 60갑자 일주 계산 |
+| **Finance Logic** | 단리 적금 이자 계산 (연 4.5%, 180일 일납) |
+| **Design System** | 카카오뱅크 브랜드 가이드라인 기반 커스텀 컴포넌트 |
 
-포트폴리오 제출 환경에서는 첫 진입 시 데모 데이터가 자동으로 입력되어 있습니다.
+---
 
-1. 온보딩에서 기본 정보와 행운 금액이 채워진 상태를 확인합니다.
-2. `가입하기`를 눌러 별자리 대시보드로 진입합니다.
-3. 우측 상단 `Time Machine`으로 1단계부터 8단계까지 시각적 진화를 빠르게 확인합니다.
-4. 8단계 진입 후 Grand Finale와 최종 행운 리포트를 확인합니다.
-5. 공유 카드 섹션에서 9:16, 1:1 포맷을 전환하고 이미지 저장 흐름을 확인합니다.
-6. 온보딩의 `PM 데이터 대시보드 보기`에서 성공 지표 설계를 확인합니다.
-
-## Deployment Guide
-
-### Local
+## 🚀 Getting Started
 
 ```bash
+# 의존성 설치
 npm install
+
+# 개발 서버 실행
 npm run dev
 ```
 
-브라우저에서 `http://localhost:3000`으로 접속합니다.
+브라우저에서 [http://localhost:3000](http://localhost:3000) 을 열어 확인하세요.
 
-### Production Build
+---
 
-```bash
-npm run build
-npm run start
+## 📂 Project Structure
+
+```
+app/
+├── page.tsx          # 전체 앱 로직 (온보딩 → 세레모니 → 대시보드)
+├── globals.css       # 전역 스타일 / 카카오 팔레트
+└── layout.tsx        # 루트 레이아웃
+public/
+└── ...               # 정적 에셋 (별자리 이미지 등)
 ```
 
-### Vercel
+---
 
-1. GitHub 저장소를 Vercel에 연결합니다.
-2. Framework Preset은 `Next.js`를 선택합니다.
-3. Build Command는 `npm run build`, Output 설정은 기본값을 사용합니다.
-4. 별도 환경 변수 없이 배포 가능합니다.
+## 💡 Design Principles
 
-### Netlify
+- **Hyper-Context**: 생년월일 하나로 금융 추천의 맥락을 완전히 개인화
+- **Delight First**: 가입·결과 확인 등 모든 주요 순간에 감정적 보상 제공
+- **Trust Through Data**: 이자·원금 수치를 즉시 계산해 신뢰감 부여
+- **KakaoBank DNA**: 과하지 않으면서도 다정한 모션, 시그니처 옐로우 포인트
 
-1. GitHub 저장소를 Netlify에 연결합니다.
-2. Build Command는 `npm run build`를 사용합니다.
-3. Next.js 런타임은 Netlify의 Next.js 지원 설정을 사용합니다.
+---
 
-## PM Takeaway
+## 📄 License
 
-이 프로젝트는 기능 구현보다 "왜 이 기능이 유지율, 바이럴, 교차 판매에 기여하는가"를 보여주기 위해 설계했습니다. 별자리 진화 시스템은 유지율을, 공유 카드는 유입을, 만기 리포트는 교차 판매 전환을 검증하는 실험 장치입니다.
+MIT — made with ✨ by Constellation Team
