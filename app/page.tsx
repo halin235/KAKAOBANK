@@ -1,9 +1,18 @@
 "use client";
 
-import { FormEvent, forwardRef, useEffect, useMemo, useRef, useState } from "react";
+import {
+  FormEvent,
+  forwardRef,
+  MutableRefObject,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { AnimatePresence, motion, useAnimationControls } from "framer-motion";
 import {
   BarChart3,
+  Check,
   ChevronDown,
   Download,
   Gift,
@@ -70,7 +79,22 @@ const MILKY_WAY_PARTICLES = Array.from({ length: 42 }, (_, index) => ({
 }));
 
 const FORTUNE_KEYWORD = "작은 루틴이 큰 별이 되는 날";
-const ANNUAL_INTEREST_RATE = 0.045;
+
+/** 기본 금리 3.5% + 우대 최대 1.0%p → 최대 연 4.5% */
+const BASE_ANNUAL_RATE = 0.035;
+const MAX_PREFERRED_BONUS_RATE = 0.01;
+const MAX_ANNUAL_RATE = BASE_ANNUAL_RATE + MAX_PREFERRED_BONUS_RATE;
+const LUCKY_DAY_BONUS_RATE = 0.005;
+const FOUR_WEEK_STREAK_BONUS_RATE = 0.005;
+
+const RATE_SUMMARY_LABEL = `최대 연 ${(MAX_ANNUAL_RATE * 100).toFixed(1)}% (기본 ${(BASE_ANNUAL_RATE * 100).toFixed(1)}% + 우대 최대 ${(MAX_PREFERRED_BONUS_RATE * 100).toFixed(1)}%p)`;
+
+const WEEKDAY_LABELS_KO = ["일", "월", "화", "수", "목", "금", "토"] as const;
+
+const getLuckyWeekdayLabel = (birthDate: string) => {
+  const d = new Date(`${birthDate}T12:00:00`);
+  return WEEKDAY_LABELS_KO[d.getDay()];
+};
 
 const DEMO_PROFILE = {
   name: "하린",
@@ -133,8 +157,8 @@ const CURATION_CASES = {
     risk_signal: "고정비 누수",
     productName: "6개월 정기예금",
     recommendation_code: "term-deposit-6m",
-    benefit: "연 4.5% 확정금리 · 만기 시 자동 갱신",
-    rate: "연 4.5% 확정",
+    benefit: "최대 연 4.5% (기본 3.5% + 우대 최대 1.0%p) · 만기 시 자동 갱신",
+    rate: RATE_SUMMARY_LABEL,
     period: "6개월 고정",
   },
 } as const;
@@ -278,18 +302,99 @@ const getRouletteCardIndex = (amount: number) =>
     ),
   );
 
+const pickAmountInRouletteRange = (floor: number, ceiling: number) => {
+  const minAmount = Math.min(Math.max(Math.round(floor), ROULETTE_MIN_AMOUNT), ceiling);
+  const maxAmount = Math.max(ceiling, minAmount);
+  return Math.floor(Math.random() * (maxAmount - minAmount + 1)) + minAmount;
+};
+
+async function animateRouletteToAmount(
+  controls: ReturnType<typeof useAnimationControls>,
+  rotationRef: MutableRefObject<number>,
+  generatedAmount: number,
+) {
+  const targetIndex = getRouletteCardIndex(generatedAmount);
+  const segmentAngle = 360 / ROULETTE_GRID_CARDS.length;
+  const targetAngle =
+    Math.random() * 360 + 360 * 8 + targetIndex * segmentAngle + segmentAngle / 2;
+  const overshootAngle = targetAngle + 12;
+
+  await controls.start({
+    rotate: rotationRef.current + 360 * 2,
+    transition: { duration: 0.5, ease: "easeIn" },
+  });
+  await controls.start({
+    rotate: rotationRef.current + 360 * 7 + Math.random() * 360,
+    transition: { duration: 2, ease: "linear" },
+  });
+  await controls.start({
+    rotate: overshootAngle,
+    transition: { duration: 0.28, ease: "easeOut" },
+  });
+  await controls.start({
+    rotate: targetAngle,
+    transition: { type: "spring", stiffness: 200, damping: 20 },
+  });
+
+  rotationRef.current = targetAngle;
+}
+
 /**
  * 일일 납입 적금 만기 수령액 계산 (연 복리 없이 단순 적금 이자식)
  * 이자 = 일납입액 × (연금리/365) × Σ(잔여일수) = 일납입액 × (연금리/365) × n(n-1)/2
  */
-const calcDailySavings = (dailyAmount: number) => {
+const calcDailySavings = (dailyAmount: number, annualRate: number = MAX_ANNUAL_RATE) => {
   const days = 180;
   const principal = dailyAmount * days;
   const interest = Math.round(
-    dailyAmount * (ANNUAL_INTEREST_RATE / 365) * ((days * (days - 1)) / 2),
+    dailyAmount * (annualRate / 365) * ((days * (days - 1)) / 2),
   );
   return { principal, interest };
 };
+
+function PreferredBonusChecklist({
+  luckyWeekdayLabel,
+  variant,
+}: {
+  luckyWeekdayLabel: string;
+  variant: "dark" | "light";
+}) {
+  const items = [
+    {
+      key: "lucky-day",
+      checked: true,
+      title: `행운 요일(${luckyWeekdayLabel}요일) 입금 시 +${(LUCKY_DAY_BONUS_RATE * 100).toFixed(1)}%p`,
+    },
+    {
+      key: "streak",
+      checked: true,
+      title: `4주 연속 저축 성공 시 +${(FOUR_WEEK_STREAK_BONUS_RATE * 100).toFixed(1)}%p`,
+    },
+  ] as const;
+
+  const boxOn = variant === "dark" ? "border-kakao-yellow bg-kakao-yellow text-kakao-black" : "border-kakao-yellow bg-kakao-yellow text-kakao-black";
+  const boxOff = variant === "dark" ? "border-white/25 bg-white/5" : "border-neutral-200 bg-white";
+  const textMuted = variant === "dark" ? "text-white/80" : "text-neutral-700";
+
+  return (
+    <ul className="space-y-2.5">
+      {items.map((item) => (
+        <li key={item.key} className="flex items-start gap-2.5">
+          <span
+            className={[
+              "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border-2",
+              item.checked ? boxOn : boxOff,
+            ].join(" ")}
+            aria-hidden
+          >
+            {item.checked ? <Check className="h-3.5 w-3.5 stroke-[3]" /> : null}
+          </span>
+          <span className={`text-xs font-bold leading-snug ${textMuted}`}>{item.title}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 function CountUp({ target, duration = 500 }: { target: number; duration?: number }) {
   const [current, setCurrent] = useState(0);
@@ -396,6 +501,7 @@ export default function Home() {
   const [fortuneMessage, setFortuneMessage] = useState("");
   const [resultBurstKey, setResultBurstKey] = useState(0);
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [minimumMaintainedAmount, setMinimumMaintainedAmount] = useState<number | null>(null);
   const [showAdmin, setShowAdmin] = useState(false);
   const rouletteControls = useAnimationControls();
   const rouletteRotationRef = useRef(0);
@@ -422,33 +528,9 @@ export default function Home() {
     setHasResult(false);
     setFortuneMessage("");
 
-    const generatedAmount =
-      Math.floor(Math.random() * (ROULETTE_MAX_AMOUNT - ROULETTE_MIN_AMOUNT + 1)) +
-      ROULETTE_MIN_AMOUNT;
-    const targetIndex = getRouletteCardIndex(generatedAmount);
-    const segmentAngle = 360 / ROULETTE_GRID_CARDS.length;
-    const targetAngle =
-      Math.random() * 360 + 360 * 8 + targetIndex * segmentAngle + segmentAngle / 2;
-    const overshootAngle = targetAngle + 12;
+    const generatedAmount = pickAmountInRouletteRange(ROULETTE_MIN_AMOUNT, ROULETTE_MAX_AMOUNT);
 
-    await rouletteControls.start({
-      rotate: rouletteRotationRef.current + 360 * 2,
-      transition: { duration: 0.5, ease: "easeIn" },
-    });
-    await rouletteControls.start({
-      rotate: rouletteRotationRef.current + 360 * 7 + Math.random() * 360,
-      transition: { duration: 2, ease: "linear" },
-    });
-    await rouletteControls.start({
-      rotate: overshootAngle,
-      transition: { duration: 0.28, ease: "easeOut" },
-    });
-    await rouletteControls.start({
-      rotate: targetAngle,
-      transition: { type: "spring", stiffness: 200, damping: 20 },
-    });
-
-    rouletteRotationRef.current = targetAngle;
+    await animateRouletteToAmount(rouletteControls, rouletteRotationRef, generatedAmount);
     setSelectedAmount(generatedAmount);
     setFortuneMessage(`${name.trim() || "하린"}님의 오늘 행운 금액: ${formatWon(generatedAmount)}`);
     setResultBurstKey((current) => current + 1);
@@ -494,6 +576,7 @@ export default function Home() {
         dayPillar={pendingProfile.birth_info.saju?.day_pillar ?? "갑자"}
         onDismiss={() => {
           setProfile(pendingProfile);
+          setMinimumMaintainedAmount(selectedAmount ?? ROULETTE_MIN_AMOUNT);
           setPendingProfile(null);
           setShowCeremony(false);
         }}
@@ -503,7 +586,12 @@ export default function Home() {
 
   if (profile) {
     return (
-      <Dashboard profile={profile} selectedAmount={selectedAmount} />
+      <Dashboard
+        profile={profile}
+        selectedAmount={selectedAmount}
+        setSelectedAmount={setSelectedAmount}
+        minimumMaintainedAmount={minimumMaintainedAmount ?? selectedAmount ?? ROULETTE_MIN_AMOUNT}
+      />
     );
   }
 
@@ -789,6 +877,7 @@ export default function Home() {
 
             <AnimatePresence>
               {hasResult && selectedAmount ? (() => {
+                const luckyWd = birthDate ? getLuckyWeekdayLabel(birthDate) : "월";
                 const { principal, interest } = calcDailySavings(selectedAmount);
                 return (
                   <motion.div
@@ -800,22 +889,31 @@ export default function Home() {
                     className="mt-4 rounded-2xl border border-white/10 bg-white/5 px-5 py-4"
                   >
                     <p className="mb-3 text-center text-[11px] font-medium text-white/45">
-                      매일 {formatWon(selectedAmount)} × 180일 납입 시 (연 4.5%, 세전)
+                      매일 {formatWon(selectedAmount)} × 180일 납입 시 · 우대 모두 충족 가정 · 세전 · 최상 시나리오
                     </p>
-                    <div className="flex items-center justify-center gap-4">
-                      <div className="text-center">
-                        <p className="text-[10px] uppercase tracking-widest text-white/35">예상 원금</p>
-                        <p className="mt-1 text-base font-black text-white">
-                          <CountUp key={`principal-${selectedAmount}`} target={principal} />
-                        </p>
+                    <p className="mb-3 text-center text-xs font-black text-kakao-yellow">
+                      최대 연 {(MAX_ANNUAL_RATE * 100).toFixed(1)}%
+                    </p>
+                    <PreferredBonusChecklist luckyWeekdayLabel={luckyWd} variant="dark" />
+                    <div className="mt-4 flex items-start justify-between gap-3">
+                      <div className="flex flex-1 items-center justify-center gap-4">
+                        <div className="text-center">
+                          <p className="text-[10px] uppercase tracking-widest text-white/35">예상 원금</p>
+                          <p className="mt-1 text-base font-black text-white">
+                            <CountUp key={`principal-${selectedAmount}`} target={principal} />
+                          </p>
+                        </div>
+                        <div className="text-xl font-light text-white/25">+</div>
+                        <div className="text-center">
+                          <p className="text-[10px] uppercase tracking-widest text-kakao-yellow/60">이자 (세전)</p>
+                          <p className="mt-1 text-base font-black text-kakao-yellow">
+                            <CountUp key={`interest-${selectedAmount}`} target={interest} />
+                          </p>
+                        </div>
                       </div>
-                      <div className="text-xl font-light text-white/25">+</div>
-                      <div className="text-center">
-                        <p className="text-[10px] uppercase tracking-widest text-kakao-yellow/60">이자 (세전)</p>
-                        <p className="mt-1 text-base font-black text-kakao-yellow">
-                          <CountUp key={`interest-${selectedAmount}`} target={interest} />
-                        </p>
-                      </div>
+                      <p className="max-w-[7.5rem] shrink-0 pt-1 text-right text-[10px] font-bold leading-snug text-white/35">
+                        매회 최소 {selectedAmount.toLocaleString("ko-KR")}원 이상 저축 기준
+                      </p>
                     </div>
                     <p className="mt-3 text-center text-[10px] text-white/25">
                       6개월 만기 예상 수령액 · 세전 · 단리 기준
@@ -825,6 +923,10 @@ export default function Home() {
               })() : null}
             </AnimatePresence>
           </div>
+
+          <p className="mt-4 text-xs leading-relaxed text-neutral-500">
+            최초 설정한 행운 금액 이상 저축해야 처음에 안내된 예상 이자를 모두 받을 수 있어요!
+          </p>
 
         </section>
 
@@ -850,9 +952,11 @@ export default function Home() {
 // 상품 핵심 요약 바텀 시트 — 아래서 위로 슬라이드하며 사주 궁합 점수를 위트 있게 노출합니다.
 function ProductBottomSheet({
   curation,
+  birthDate,
   onClose,
 }: {
   curation: ReturnType<typeof getFortuneCuration>;
+  birthDate: string;
   onClose: () => void;
 }) {
   const caseColor =
@@ -905,7 +1009,16 @@ function ProductBottomSheet({
           <div className="grid grid-cols-3 gap-3">
             <div className="rounded-2xl bg-kakao-gray p-3 text-center">
               <p className="text-[10px] font-bold text-neutral-400">금리</p>
-              <p className="mt-1 text-sm font-black leading-tight text-kakao-black">{curation.rate}</p>
+              <p className="mt-1 text-sm font-black leading-tight text-kakao-black">
+                {curation.curationCase === "C"
+                  ? `최대 연 ${(MAX_ANNUAL_RATE * 100).toFixed(1)}%`
+                  : curation.rate}
+              </p>
+              {curation.curationCase === "C" ? (
+                <p className="mt-1 text-[10px] font-semibold leading-snug text-neutral-500">
+                  기본 {(BASE_ANNUAL_RATE * 100).toFixed(1)}% + 우대 최대 {(MAX_PREFERRED_BONUS_RATE * 100).toFixed(1)}%p
+                </p>
+              ) : null}
             </div>
             <div className="rounded-2xl bg-kakao-gray p-3 text-center">
               <p className="text-[10px] font-bold text-neutral-400">기간</p>
@@ -925,6 +1038,18 @@ function ProductBottomSheet({
             <p className="text-[10px] font-bold text-yellow-600">가입 혜택</p>
             <p className="mt-1 font-black text-kakao-black">{curation.benefit}</p>
           </div>
+
+          {curation.curationCase === "C" ? (
+            <div className="rounded-2xl border border-neutral-100 bg-white px-4 py-3">
+              <p className="text-[10px] font-black uppercase tracking-widest text-neutral-400">
+                우대 조건 · 최상 시나리오
+              </p>
+              <PreferredBonusChecklist
+                luckyWeekdayLabel={getLuckyWeekdayLabel(birthDate)}
+                variant="light"
+              />
+            </div>
+          ) : null}
 
           {/* 개인화 설명 */}
           <p className="text-sm leading-6 text-neutral-500">{curation.message}</p>
@@ -1086,12 +1211,20 @@ function JoinCeremony({
 function Dashboard({
   profile,
   selectedAmount,
+  setSelectedAmount,
+  minimumMaintainedAmount,
 }: {
   profile: UserProfile;
   selectedAmount: number | null;
+  setSelectedAmount: (amount: number | null) => void;
+  minimumMaintainedAmount: number;
 }) {
   const [isFortuneOpen, setIsFortuneOpen] = useState(false);
   const [rewardStage, setRewardStage] = useState(INITIAL_SAVING_STEP);
+  const [firstRoundDepositAmount, setFirstRoundDepositAmount] = useState<number | null>(null);
+  const [dashboardSpinning, setDashboardSpinning] = useState(false);
+  const [dashboardBurstKey, setDashboardBurstKey] = useState(0);
+  const [dashboardSpinMessage, setDashboardSpinMessage] = useState("");
   const [toastMessage, setToastMessage] = useState<string>(
     REWARD_STAGE_MESSAGES[INITIAL_SAVING_STEP],
   );
@@ -1102,15 +1235,46 @@ function Dashboard({
   const [showCancelDefense, setShowCancelDefense] = useState(false);
   const [showProductModal, setShowProductModal] = useState(false);
   const shareCardRef = useRef<HTMLDivElement>(null);
+  const dashboardControls = useAnimationControls();
+  const dashboardRotationRef = useRef(0);
   const activeNodes = CONSTELLATION_NODES.slice(0, rewardStage);
   const isConstellationStage = rewardStage >= 3;
   const isAuroraStage = rewardStage >= 5;
   const isGrandFinale = rewardStage >= 8;
   const curation = getFortuneCuration(profile.birth_info);
+  const luckyWeekdayLabel = getLuckyWeekdayLabel(profile.birth_info.birth_date);
   const particleDensity = isConstellationStage ? MILKY_WAY_PARTICLES : MILKY_WAY_PARTICLES.slice(0, 28);
   const cardSurfaceClass = isAuroraStage
     ? "border-white/20 bg-gradient-to-br from-white/20 via-purple-200/15 to-cyan-200/10"
     : "border-white/10 bg-white/10";
+
+  const spinDashboardRoulette = async () => {
+    if (dashboardSpinning || rewardStage < 2 || firstRoundDepositAmount === null) {
+      return;
+    }
+
+    setDashboardSpinning(true);
+    setDashboardSpinMessage("");
+
+    const generatedAmount = pickAmountInRouletteRange(firstRoundDepositAmount, ROULETTE_MAX_AMOUNT);
+
+    await animateRouletteToAmount(dashboardControls, dashboardRotationRef, generatedAmount);
+
+    setSelectedAmount(generatedAmount);
+    setDashboardBurstKey((key) => key + 1);
+
+    if (generatedAmount > firstRoundDepositAmount) {
+      setDashboardSpinMessage(
+        `${profile.birth_info.name}님, 오늘의 운세가 더 좋아졌어요! 최소 금액인 ${firstRoundDepositAmount.toLocaleString("ko-KR")}원보다 더 큰 행운을 잡아보세요.`,
+      );
+    } else {
+      setDashboardSpinMessage(
+        `${profile.birth_info.name}님의 오늘 행운 금액: ${formatWon(generatedAmount)}`,
+      );
+    }
+
+    setDashboardSpinning(false);
+  };
 
   useEffect(() => {
     setToastMessage(REWARD_STAGE_MESSAGES[rewardStage as keyof typeof REWARD_STAGE_MESSAGES]);
@@ -1137,6 +1301,9 @@ function Dashboard({
 
   // 유저의 심리적 보상을 극대화하기 위해 저축 행동을 즉시 별 생성 애니메이션으로 연결합니다.
   const handleSave = () => {
+    if (rewardStage === 1 && selectedAmount !== null) {
+      setFirstRoundDepositAmount(selectedAmount);
+    }
     setRewardStage((currentStage) => Math.min(currentStage + 1, CONSTELLATION_NODES.length));
   };
 
@@ -1158,8 +1325,8 @@ function Dashboard({
     link.click();
   };
 
-  const maturityPrincipal = (selectedAmount ?? 0) * 180;
-  const maturityInterest = Math.round(maturityPrincipal * ANNUAL_INTEREST_RATE * 0.5);
+  const dailyForProjection = selectedAmount ?? 0;
+  const { principal: maturityPrincipal, interest: maturityInterest } = calcDailySavings(dailyForProjection);
 
   // 만기 리포트는 Grand Finale 직후 노출해 감정적 피크에서 교차 판매 제안을 연결합니다.
   if (showReport) {
@@ -1401,6 +1568,79 @@ function Dashboard({
           })}
         </section>
 
+        {rewardStage >= 2 && rewardStage < CONSTELLATION_NODES.length && firstRoundDepositAmount !== null ? (
+          <section className="rounded-[28px] border border-white/15 bg-[#070B1E] p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-black text-kakao-yellow">2회차부터 행운 금액</p>
+                <p className="mt-1 text-sm font-semibold text-white/55">
+                  룰렛은 1회차 저축액({formatWon(firstRoundDepositAmount)}) 이상만 나와요.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={spinDashboardRoulette}
+                disabled={dashboardSpinning}
+                className="shrink-0 rounded-full bg-kakao-yellow px-4 py-2 text-xs font-black text-kakao-black transition active:scale-95 disabled:opacity-60"
+              >
+                {dashboardSpinning ? "돌리는 중..." : "룰렛 돌리기"}
+              </button>
+            </div>
+
+            <div className="relative mx-auto mt-4 flex h-44 w-full max-w-[200px] items-center justify-center">
+              <motion.div
+                animate={dashboardControls}
+                className="relative h-36 w-36 overflow-hidden rounded-full border-4 border-kakao-yellow shadow-[0_0_24px_rgba(254,229,0,0.35)]"
+              >
+                <img
+                  src="/image_f00ef5.png"
+                  alt=""
+                  className="absolute inset-0 z-10 h-full w-full object-cover"
+                  onError={(event) => {
+                    event.currentTarget.style.display = "none";
+                  }}
+                />
+                <div className="absolute inset-0 rounded-full bg-[conic-gradient(from_0deg,#fee500,#f59e0b,#a5f3fc,#c084fc,#fee500,#f97316,#e0f2fe,#fee500)] opacity-80" />
+                <div className="absolute inset-4 z-20 rounded-full border border-white/40 bg-slate-950/40" />
+              </motion.div>
+              <AnimatePresence>
+                {dashboardBurstKey > 0 && selectedAmount ? (
+                  <motion.div
+                    key={`dash-roulette-${dashboardBurstKey}`}
+                    className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center"
+                    initial={{ opacity: 1 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                  >
+                    <motion.div
+                      className="rounded-2xl bg-slate-950/85 px-4 py-2.5 text-center shadow-[0_0_28px_rgba(254,229,0,0.4)] backdrop-blur"
+                      initial={{ scale: 0, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      transition={{ type: "spring", stiffness: 420, damping: 12 }}
+                    >
+                      <p className="text-[10px] font-black text-kakao-yellow">행운 금액</p>
+                      <p className="mt-0.5 text-lg font-black text-kakao-yellow">
+                        <CountUp key={`dash-burst-${dashboardBurstKey}`} target={selectedAmount} duration={700} />
+                      </p>
+                    </motion.div>
+                  </motion.div>
+                ) : null}
+              </AnimatePresence>
+              <div className="absolute -top-0.5 left-1/2 z-40 h-0 w-0 -translate-x-1/2 border-x-[10px] border-t-[20px] border-x-transparent border-t-kakao-yellow drop-shadow" />
+            </div>
+
+            {dashboardSpinMessage ? (
+              <p className="mt-4 rounded-2xl bg-white/5 px-4 py-3 text-center text-xs font-bold leading-relaxed text-white/80">
+                {dashboardSpinMessage}
+              </p>
+            ) : null}
+
+            <p className="mt-3 text-center text-[11px] leading-relaxed text-white/35">
+              최초 설정한 행운 금액 이상 저축해야 처음에 안내된 예상 이자를 모두 받을 수 있어요!
+            </p>
+          </section>
+        ) : null}
+
         <motion.button
           type="button"
           onClick={handleSave}
@@ -1419,6 +1659,9 @@ function Dashboard({
             <p className="mt-2 text-2xl font-black">
               {selectedAmount ? formatWon(selectedAmount) : "-"}
             </p>
+            <p className="mt-2 text-[10px] font-semibold text-white/35">
+              최소 유지 {formatWon(minimumMaintainedAmount)}
+            </p>
           </div>
           <div className={`rounded-3xl p-4 backdrop-blur transition duration-700 ${cardSurfaceClass}`}>
             <p className="text-xs font-bold text-white/55">상품 조건</p>
@@ -1431,6 +1674,34 @@ function Dashboard({
             </p>
           </div>
         </section>
+
+        {selectedAmount ? (
+          <section className={`rounded-[28px] border border-white/15 p-4 backdrop-blur transition duration-700 ${cardSurfaceClass}`}>
+            <p className="text-[10px] font-black uppercase tracking-widest text-kakao-yellow/90">
+              최상 시나리오 만기 예상 · 세전
+            </p>
+            <p className="mt-1 text-xs font-bold text-white/55">
+              매일 {formatWon(selectedAmount)} × 180일 · 최대 연 {(MAX_ANNUAL_RATE * 100).toFixed(1)}% (우대 충족)
+            </p>
+            <PreferredBonusChecklist luckyWeekdayLabel={luckyWeekdayLabel} variant="dark" />
+            <div className="mt-3 flex items-start justify-between gap-3">
+              <div className="flex flex-1 items-center justify-center gap-3">
+                <div className="text-center">
+                  <p className="text-[10px] text-white/40">예상 원금</p>
+                  <p className="mt-1 text-sm font-black text-white">{formatWon(maturityPrincipal)}</p>
+                </div>
+                <span className="text-white/25">+</span>
+                <div className="text-center">
+                  <p className="text-[10px] text-kakao-yellow/55">이자</p>
+                  <p className="mt-1 text-sm font-black text-kakao-yellow">{formatWon(maturityInterest)}</p>
+                </div>
+              </div>
+              <p className="max-w-[6.5rem] shrink-0 text-right text-[10px] font-bold leading-snug text-white/35">
+                매회 최소 {(firstRoundDepositAmount ?? selectedAmount).toLocaleString("ko-KR")}원 이상 저축 기준
+              </p>
+            </div>
+          </section>
+        ) : null}
 
         <section
           className={[
@@ -1603,16 +1874,32 @@ function Dashboard({
               <div className="mt-2 flex items-start justify-between gap-3">
                 <div className="flex-1">
                   <p className="text-xl font-black leading-tight">{curation.title}</p>
-                  {/* 금리 — 카카오 시그니처 옐로우 강조 */}
-                  <p className="mt-1.5 text-base font-black text-kakao-yellow">
-                    {curation.rate}
-                  </p>
+                  {curation.curationCase === "C" ? (
+                    <>
+                      <p className="mt-1.5 text-xl font-black text-kakao-yellow">
+                        최대 연 {(MAX_ANNUAL_RATE * 100).toFixed(1)}%
+                      </p>
+                      <p className="mt-1 text-xs font-bold text-white/50">
+                        기본 {(BASE_ANNUAL_RATE * 100).toFixed(1)}% + 우대 최대 {(MAX_PREFERRED_BONUS_RATE * 100).toFixed(1)}%p
+                      </p>
+                    </>
+                  ) : (
+                    <p className="mt-1.5 text-base font-black text-kakao-yellow">{curation.rate}</p>
+                  )}
                   <p className="mt-1 text-xs font-semibold text-white/45">
                     {curation.benefit}
                   </p>
                 </div>
                 <ShieldCheck className="mt-0.5 shrink-0 text-kakao-yellow" size={28} />
               </div>
+              {curation.curationCase === "C" ? (
+                <div className="mt-4 border-t border-white/10 pt-3">
+                  <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-white/40">
+                    우대 조건 (체크 시 최대 금리)
+                  </p>
+                  <PreferredBonusChecklist luckyWeekdayLabel={luckyWeekdayLabel} variant="dark" />
+                </div>
+              ) : null}
             </motion.div>
 
             <motion.button
@@ -1683,7 +1970,11 @@ function Dashboard({
       </AnimatePresence>
       <AnimatePresence>
         {showProductModal ? (
-          <ProductBottomSheet curation={curation} onClose={() => setShowProductModal(false)} />
+          <ProductBottomSheet
+            curation={curation}
+            birthDate={profile.birth_info.birth_date}
+            onClose={() => setShowProductModal(false)}
+          />
         ) : null}
       </AnimatePresence>
     </motion.main>
@@ -2121,6 +2412,9 @@ function MaturityReport({
             <p className="mt-2 text-2xl font-black">{formatWon(interest)}</p>
           </div>
         </section>
+        <p className="text-center text-[11px] leading-relaxed text-white/35">
+          매회 최소 금액 이상 저축 및 우대 조건 충족을 가정한 최대 연 {(MAX_ANNUAL_RATE * 100).toFixed(1)}% 최상 시나리오 · 세전 · 단리
+        </p>
 
         <section className="rounded-[32px] border border-kakao-yellow/35 bg-gradient-to-br from-kakao-yellow via-yellow-200 to-amber-500 p-5 text-kakao-black shadow-[0_24px_70px_rgba(254,229,0,0.28)]">
           <div className="flex items-center gap-4">
