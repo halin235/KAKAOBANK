@@ -23,6 +23,22 @@ import {
   X,
 } from "lucide-react";
 import { toPng } from "html-to-image";
+import {
+  BASE_ANNUAL_RATE,
+  MAX_ANNUAL_RATE,
+  MAX_PREFERRED_BONUS_RATE,
+  LUCKY_DAY_BONUS_RATE,
+  FOUR_WEEK_STREAK_BONUS_RATE,
+  RATE_SUMMARY_LABEL,
+  CALCULATION_DISCLOSURE_SUBTITLE,
+  calcDailySavings,
+  estimateLinkedDaysFromStage,
+  calcAccumulatedEstimatedInterest,
+  calcMaturityPreferredBonusWon,
+  computeRealtimeMaturityPrediction,
+  formatMinDepositFloorWarning,
+  PRODUCT_TERM_DAYS,
+} from "../utils/financeCalculator";
 
 const ROULETTE_MIN_AMOUNT = 3333;
 const ROULETTE_MAX_AMOUNT = 100000;
@@ -79,15 +95,6 @@ const MILKY_WAY_PARTICLES = Array.from({ length: 42 }, (_, index) => ({
 }));
 
 const FORTUNE_KEYWORD = "작은 루틴이 큰 별이 되는 날";
-
-/** 기본 금리 3.5% + 우대 최대 1.0%p → 최대 연 4.5% */
-const BASE_ANNUAL_RATE = 0.035;
-const MAX_PREFERRED_BONUS_RATE = 0.01;
-const MAX_ANNUAL_RATE = BASE_ANNUAL_RATE + MAX_PREFERRED_BONUS_RATE;
-const LUCKY_DAY_BONUS_RATE = 0.005;
-const FOUR_WEEK_STREAK_BONUS_RATE = 0.005;
-
-const RATE_SUMMARY_LABEL = `최대 연 ${(MAX_ANNUAL_RATE * 100).toFixed(1)}% (기본 ${(BASE_ANNUAL_RATE * 100).toFixed(1)}% + 우대 최대 ${(MAX_PREFERRED_BONUS_RATE * 100).toFixed(1)}%p)`;
 
 const WEEKDAY_LABELS_KO = ["일", "월", "화", "수", "목", "금", "토"] as const;
 
@@ -339,19 +346,6 @@ async function animateRouletteToAmount(
   rotationRef.current = targetAngle;
 }
 
-/**
- * 일일 납입 적금 만기 수령액 계산 (연 복리 없이 단순 적금 이자식)
- * 이자 = 일납입액 × (연금리/365) × Σ(잔여일수) = 일납입액 × (연금리/365) × n(n-1)/2
- */
-const calcDailySavings = (dailyAmount: number, annualRate: number = MAX_ANNUAL_RATE) => {
-  const days = 180;
-  const principal = dailyAmount * days;
-  const interest = Math.round(
-    dailyAmount * (annualRate / 365) * ((days * (days - 1)) / 2),
-  );
-  return { principal, interest };
-};
-
 function PreferredBonusChecklist({
   luckyWeekdayLabel,
   variant,
@@ -501,7 +495,7 @@ export default function Home() {
   const [fortuneMessage, setFortuneMessage] = useState("");
   const [resultBurstKey, setResultBurstKey] = useState(0);
   const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [minimumMaintainedAmount, setMinimumMaintainedAmount] = useState<number | null>(null);
+  const [minDepositLimit, setMinDepositLimit] = useState<number | null>(null);
   const [showAdmin, setShowAdmin] = useState(false);
   const rouletteControls = useAnimationControls();
   const rouletteRotationRef = useRef(0);
@@ -576,7 +570,7 @@ export default function Home() {
         dayPillar={pendingProfile.birth_info.saju?.day_pillar ?? "갑자"}
         onDismiss={() => {
           setProfile(pendingProfile);
-          setMinimumMaintainedAmount(selectedAmount ?? ROULETTE_MIN_AMOUNT);
+          setMinDepositLimit(selectedAmount ?? ROULETTE_MIN_AMOUNT);
           setPendingProfile(null);
           setShowCeremony(false);
         }}
@@ -590,7 +584,7 @@ export default function Home() {
         profile={profile}
         selectedAmount={selectedAmount}
         setSelectedAmount={setSelectedAmount}
-        minimumMaintainedAmount={minimumMaintainedAmount ?? selectedAmount ?? ROULETTE_MIN_AMOUNT}
+        minDepositLimit={minDepositLimit ?? selectedAmount ?? ROULETTE_MIN_AMOUNT}
       />
     );
   }
@@ -879,6 +873,22 @@ export default function Home() {
               {hasResult && selectedAmount ? (() => {
                 const luckyWd = birthDate ? getLuckyWeekdayLabel(birthDate) : "월";
                 const { principal, interest } = calcDailySavings(selectedAmount);
+                const onboardPred = computeRealtimeMaturityPrediction({
+                  rewardStage: 1,
+                  todayDepositAmount: selectedAmount,
+                  minDepositLimit: selectedAmount,
+                  firstRoundDepositAmount: null,
+                });
+                const uniformTotalAt = (daily: number) => {
+                  const row = calcDailySavings(daily);
+                  return row.principal + row.interest;
+                };
+                const lowU = uniformTotalAt(ROULETTE_MIN_AMOUNT);
+                const highU = uniformTotalAt(ROULETTE_MAX_AMOUNT);
+                const curU = uniformTotalAt(selectedAmount);
+                const onboardProgressPct =
+                  highU <= lowU ? 100 : Math.min(100, Math.max(0, ((curU - lowU) / (highU - lowU)) * 100));
+
                 return (
                   <motion.div
                     key={`savings-${selectedAmount}`}
@@ -889,7 +899,7 @@ export default function Home() {
                     className="mt-4 rounded-2xl border border-white/10 bg-white/5 px-5 py-4"
                   >
                     <p className="mb-3 text-center text-[11px] font-medium text-white/45">
-                      매일 {formatWon(selectedAmount)} × 180일 납입 시 · 우대 모두 충족 가정 · 세전 · 최상 시나리오
+                      매일 {formatWon(selectedAmount)} × {PRODUCT_TERM_DAYS}일 납입 시 · 우대 모두 충족 가정 · 세전 · 최상 시나리오
                     </p>
                     <p className="mb-3 text-center text-xs font-black text-kakao-yellow">
                       최대 연 {(MAX_ANNUAL_RATE * 100).toFixed(1)}%
@@ -915,6 +925,38 @@ export default function Home() {
                         매회 최소 {selectedAmount.toLocaleString("ko-KR")}원 이상 저축 기준
                       </p>
                     </div>
+
+                    <div className="mt-5 border-t border-white/10 pt-4">
+                      <div className="flex items-end justify-between gap-2">
+                        <div>
+                          <p className="text-[10px] font-black uppercase tracking-widest text-kakao-yellow/80">
+                            만기 달성 예측
+                          </p>
+                          <p className="mt-1 text-[11px] text-white/45">
+                            원금 {formatWon(onboardPred.projectedTotalPrincipal)} + 이자{" "}
+                            {formatWon(onboardPred.projectedInterestPretax)}
+                          </p>
+                        </div>
+                        <p className="text-lg font-black text-emerald-300 tabular-nums">
+                          {formatWon(onboardPred.projectedMaturityTotalPretax)}
+                        </p>
+                      </div>
+                      <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/10">
+                        <motion.div
+                          className="h-full rounded-full bg-gradient-to-r from-kakao-yellow to-emerald-400"
+                          initial={false}
+                          animate={{ width: `${onboardProgressPct}%` }}
+                          transition={{ type: "spring", stiffness: 320, damping: 28 }}
+                        />
+                      </div>
+                      <p className="mt-3 text-[10px] font-black uppercase tracking-widest text-white/35">
+                        신뢰할 수 있는 계산 근거
+                      </p>
+                      <p className="mt-1 text-[11px] leading-relaxed text-white/45">
+                        {CALCULATION_DISCLOSURE_SUBTITLE}
+                      </p>
+                    </div>
+
                     <p className="mt-3 text-center text-[10px] text-white/25">
                       6개월 만기 예상 수령액 · 세전 · 단리 기준
                     </p>
@@ -1212,16 +1254,17 @@ function Dashboard({
   profile,
   selectedAmount,
   setSelectedAmount,
-  minimumMaintainedAmount,
+  minDepositLimit,
 }: {
   profile: UserProfile;
   selectedAmount: number | null;
   setSelectedAmount: (amount: number | null) => void;
-  minimumMaintainedAmount: number;
+  minDepositLimit: number;
 }) {
   const [isFortuneOpen, setIsFortuneOpen] = useState(false);
   const [rewardStage, setRewardStage] = useState(INITIAL_SAVING_STEP);
   const [firstRoundDepositAmount, setFirstRoundDepositAmount] = useState<number | null>(null);
+  const [todayInputWon, setTodayInputWon] = useState(() => selectedAmount ?? 0);
   const [dashboardSpinning, setDashboardSpinning] = useState(false);
   const [dashboardBurstKey, setDashboardBurstKey] = useState(0);
   const [dashboardSpinMessage, setDashboardSpinMessage] = useState("");
@@ -1233,6 +1276,7 @@ function Dashboard({
   const [showReport, setShowReport] = useState(false);
   const [shareFormat, setShareFormat] = useState<"story" | "feed">("story");
   const [showCancelDefense, setShowCancelDefense] = useState(false);
+  const [retentionRelightToken, setRetentionRelightToken] = useState(0);
   const [showProductModal, setShowProductModal] = useState(false);
   const shareCardRef = useRef<HTMLDivElement>(null);
   const dashboardControls = useAnimationControls();
@@ -1248,6 +1292,59 @@ function Dashboard({
     ? "border-white/20 bg-gradient-to-br from-white/20 via-purple-200/15 to-cyan-200/10"
     : "border-white/10 bg-white/10";
 
+  useEffect(() => {
+    if (selectedAmount != null) {
+      setTodayInputWon(selectedAmount);
+    }
+  }, [selectedAmount]);
+
+  const maturitySimulator = useMemo(
+    () =>
+      computeRealtimeMaturityPrediction({
+        rewardStage,
+        todayDepositAmount: Math.max(0, todayInputWon),
+        minDepositLimit,
+        firstRoundDepositAmount,
+      }),
+    [rewardStage, todayInputWon, minDepositLimit, firstRoundDepositAmount],
+  );
+
+  const baselineSimulator = useMemo(
+    () =>
+      computeRealtimeMaturityPrediction({
+        rewardStage,
+        todayDepositAmount: minDepositLimit,
+        minDepositLimit,
+        firstRoundDepositAmount,
+      }),
+    [rewardStage, minDepositLimit, firstRoundDepositAmount],
+  );
+
+  const stretchSimulator = useMemo(
+    () =>
+      computeRealtimeMaturityPrediction({
+        rewardStage,
+        todayDepositAmount: ROULETTE_MAX_AMOUNT,
+        minDepositLimit,
+        firstRoundDepositAmount,
+      }),
+    [rewardStage, minDepositLimit, firstRoundDepositAmount],
+  );
+
+  const predictorProgressPct = useMemo(() => {
+    const low = baselineSimulator.projectedMaturityTotalPretax;
+    const high = stretchSimulator.projectedMaturityTotalPretax;
+    const cur = maturitySimulator.projectedMaturityTotalPretax;
+    if (high <= low) return 100;
+    return Math.min(100, Math.max(0, ((cur - low) / (high - low)) * 100));
+  }, [baselineSimulator, stretchSimulator, maturitySimulator]);
+
+  const belowFloor = rewardStage >= 2 && todayInputWon < minDepositLimit;
+  const meetsFloorPositive =
+    rewardStage < CONSTELLATION_NODES.length &&
+    todayInputWon > 0 &&
+    todayInputWon >= minDepositLimit;
+
   const spinDashboardRoulette = async () => {
     if (dashboardSpinning || rewardStage < 2 || firstRoundDepositAmount === null) {
       return;
@@ -1256,14 +1353,18 @@ function Dashboard({
     setDashboardSpinning(true);
     setDashboardSpinMessage("");
 
-    const generatedAmount = pickAmountInRouletteRange(firstRoundDepositAmount, ROULETTE_MAX_AMOUNT);
+    const rouletteFloor = Math.max(firstRoundDepositAmount, minDepositLimit);
+    const generatedAmount = pickAmountInRouletteRange(rouletteFloor, ROULETTE_MAX_AMOUNT);
 
     await animateRouletteToAmount(dashboardControls, dashboardRotationRef, generatedAmount);
 
     setSelectedAmount(generatedAmount);
+    setTodayInputWon(generatedAmount);
     setDashboardBurstKey((key) => key + 1);
 
-    if (generatedAmount > firstRoundDepositAmount) {
+    if (generatedAmount < minDepositLimit) {
+      setDashboardSpinMessage(formatMinDepositFloorWarning(minDepositLimit));
+    } else if (generatedAmount > firstRoundDepositAmount) {
       setDashboardSpinMessage(
         `${profile.birth_info.name}님, 오늘의 운세가 더 좋아졌어요! 최소 금액인 ${firstRoundDepositAmount.toLocaleString("ko-KR")}원보다 더 큰 행운을 잡아보세요.`,
       );
@@ -1301,9 +1402,14 @@ function Dashboard({
 
   // 유저의 심리적 보상을 극대화하기 위해 저축 행동을 즉시 별 생성 애니메이션으로 연결합니다.
   const handleSave = () => {
-    if (rewardStage === 1 && selectedAmount !== null) {
-      setFirstRoundDepositAmount(selectedAmount);
+    if (rewardStage >= 2 && todayInputWon < minDepositLimit) {
+      return;
     }
+    const commitAmount = todayInputWon > 0 ? todayInputWon : (selectedAmount ?? 0);
+    if (rewardStage === 1) {
+      setFirstRoundDepositAmount(commitAmount);
+    }
+    setSelectedAmount(commitAmount);
     setRewardStage((currentStage) => Math.min(currentStage + 1, CONSTELLATION_NODES.length));
   };
 
@@ -1325,7 +1431,7 @@ function Dashboard({
     link.click();
   };
 
-  const dailyForProjection = selectedAmount ?? 0;
+  const dailyForProjection = todayInputWon > 0 ? todayInputWon : (selectedAmount ?? 0);
   const { principal: maturityPrincipal, interest: maturityInterest } = calcDailySavings(dailyForProjection);
 
   // 만기 리포트는 Grand Finale 직후 노출해 감정적 피크에서 교차 판매 제안을 연결합니다.
@@ -1423,6 +1529,21 @@ function Dashboard({
               : "border-white/10 bg-slate-950/55",
           ].join(" ")}
         >
+          <AnimatePresence>
+            {retentionRelightToken > 0 ? (
+              <motion.div
+                key={retentionRelightToken}
+                className="pointer-events-none absolute inset-0 z-[25] rounded-[24px] bg-[radial-gradient(circle_at_50%_45%,rgba(254,229,0,0.55),transparent_62%)] mix-blend-screen"
+                initial={{ opacity: 0 }}
+                animate={{
+                  opacity: [0, 1, 0.85, 0],
+                  scale: [0.92, 1, 1.02, 1],
+                }}
+                transition={{ duration: 1.15, ease: "easeOut" }}
+                onAnimationComplete={() => setRetentionRelightToken(0)}
+              />
+            ) : null}
+          </AnimatePresence>
           <div className="absolute left-5 top-5 z-10 rounded-full bg-white/10 px-3 py-1.5 text-xs font-bold text-white/75 backdrop-blur">
             저축 성공 {rewardStage}회
           </div>
@@ -1574,7 +1695,9 @@ function Dashboard({
               <div>
                 <p className="text-xs font-black text-kakao-yellow">2회차부터 행운 금액</p>
                 <p className="mt-1 text-sm font-semibold text-white/55">
-                  룰렛은 1회차 저축액({formatWon(firstRoundDepositAmount)}) 이상만 나와요.
+                  룰렛은{" "}
+                  {formatWon(Math.max(firstRoundDepositAmount, minDepositLimit))} 이상만 나와요. (행운 금액
+                  하한 {formatWon(minDepositLimit)})
                 </p>
               </div>
               <button
@@ -1644,24 +1767,56 @@ function Dashboard({
         <motion.button
           type="button"
           onClick={handleSave}
-          disabled={rewardStage >= CONSTELLATION_NODES.length}
+          disabled={rewardStage >= CONSTELLATION_NODES.length || belowFloor}
           whileTap={{ scale: 0.97 }}
           className="rounded-[26px] bg-kakao-yellow px-5 py-4 text-lg font-black text-kakao-black shadow-[0_18px_45px_rgba(254,229,0,0.25)] transition disabled:bg-white/15 disabled:text-white/45"
         >
           {rewardStage >= CONSTELLATION_NODES.length
             ? "6개월 저축 여정 완료"
-            : `${selectedAmount ? formatWon(selectedAmount) : "오늘 금액"} 저축하기`}
+            : `${formatWon(todayInputWon > 0 ? todayInputWon : selectedAmount ?? 0)} 저축하기`}
         </motion.button>
 
         <section className="grid grid-cols-2 gap-3">
           <div className={`rounded-3xl p-4 backdrop-blur transition duration-700 ${cardSurfaceClass}`}>
-            <p className="text-xs font-bold text-white/55">오늘 저축 금액</p>
-            <p className="mt-2 text-2xl font-black">
-              {selectedAmount ? formatWon(selectedAmount) : "-"}
-            </p>
+            <label className="block">
+              <p className="text-xs font-bold text-white/55">오늘 저축 금액</p>
+              <input
+                type="number"
+                inputMode="numeric"
+                min={ROULETTE_MIN_AMOUNT}
+                max={ROULETTE_MAX_AMOUNT}
+                value={todayInputWon || ""}
+                placeholder="금액 입력"
+                disabled={rewardStage >= CONSTELLATION_NODES.length}
+                onChange={(event) => {
+                  const raw = event.target.value;
+                  const parsed = raw === "" ? 0 : Number(raw);
+                  if (!Number.isFinite(parsed)) {
+                    setTodayInputWon(0);
+                    return;
+                  }
+                  const clamped = Math.min(
+                    ROULETTE_MAX_AMOUNT,
+                    Math.max(0, Math.round(parsed)),
+                  );
+                  setTodayInputWon(clamped);
+                }}
+                className="mt-2 w-full rounded-2xl border border-white/15 bg-white/10 px-3 py-3 text-xl font-black text-white outline-none transition placeholder:text-white/25 focus:border-kakao-yellow focus:ring-2 focus:ring-kakao-yellow/40 disabled:opacity-45"
+              />
+            </label>
             <p className="mt-2 text-[10px] font-semibold text-white/35">
-              최소 유지 {formatWon(minimumMaintainedAmount)}
+              최소 유지(행운 금액) {formatWon(minDepositLimit)}
             </p>
+            {belowFloor ? (
+              <p className="mt-2 rounded-xl bg-red-500/15 px-2 py-2 text-[11px] font-bold leading-snug text-red-200 ring-1 ring-red-400/30">
+                {formatMinDepositFloorWarning(minDepositLimit)}
+              </p>
+            ) : null}
+            {meetsFloorPositive ? (
+              <p className="mt-2 text-[11px] font-black leading-snug text-emerald-300">
+                이대로 모으면 목표 달성 가능! ✨
+              </p>
+            ) : null}
           </div>
           <div className={`rounded-3xl p-4 backdrop-blur transition duration-700 ${cardSurfaceClass}`}>
             <p className="text-xs font-bold text-white/55">상품 조건</p>
@@ -1675,13 +1830,84 @@ function Dashboard({
           </div>
         </section>
 
-        {selectedAmount ? (
-          <section className={`rounded-[28px] border border-white/15 p-4 backdrop-blur transition duration-700 ${cardSurfaceClass}`}>
-            <p className="text-[10px] font-black uppercase tracking-widest text-kakao-yellow/90">
-              최상 시나리오 만기 예상 · 세전
+        <section className={`rounded-[28px] border border-white/15 p-4 backdrop-blur transition duration-700 ${cardSurfaceClass}`}>
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-widest text-kakao-yellow/90">
+                만기 달성 예측 · 실시간
+              </p>
+              <p className="mt-1 text-xs font-semibold text-white/55">
+                세전 · 연 {(maturitySimulator.effectiveAnnualRate * 100).toFixed(2)}% 적용 (기본 {(BASE_ANNUAL_RATE * 100).toFixed(1)}% + 우대{" "}
+                {(maturitySimulator.accruedPreferredBonusRate * 100).toFixed(2)}%p)
+              </p>
+            </div>
+            <div className="text-right">
+              <p className="text-[10px] font-bold text-white/35">예상 만기 수령액</p>
+              <p
+                className={[
+                  "mt-0.5 text-xl font-black tabular-nums",
+                  meetsFloorPositive ? "text-emerald-300" : "text-white",
+                ].join(" ")}
+              >
+                {formatWon(maturitySimulator.projectedMaturityTotalPretax)}
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-4">
+            <div className="mb-1.5 flex justify-between text-[10px] font-bold text-white/40">
+              <span>하한선만 넣을 때</span>
+              <span>목표 가속</span>
+            </div>
+            <div className="h-3 overflow-hidden rounded-full bg-white/10">
+              <motion.div
+                className="h-full rounded-full bg-gradient-to-r from-kakao-yellow via-emerald-300 to-cyan-300"
+                initial={false}
+                animate={{ width: `${predictorProgressPct}%` }}
+                transition={{ type: "spring", stiffness: 320, damping: 28 }}
+              />
+            </div>
+          </div>
+
+          <div className="mt-4 grid grid-cols-3 gap-2 text-center text-[10px]">
+            <div className="rounded-xl bg-white/5 px-2 py-2">
+              <p className="font-bold text-white/35">누적·미래 원금</p>
+              <p className="mt-1 font-black text-white tabular-nums">
+                {formatWon(maturitySimulator.projectedTotalPrincipal)}
+              </p>
+            </div>
+            <div className="rounded-xl bg-white/5 px-2 py-2">
+              <p className="font-bold text-white/35">예상 이자</p>
+              <p className="mt-1 font-black text-kakao-yellow tabular-nums">
+                {formatWon(maturitySimulator.projectedInterestPretax)}
+              </p>
+            </div>
+            <div className="rounded-xl bg-white/5 px-2 py-2">
+              <p className="font-bold text-white/35">만기 일수</p>
+              <p className="mt-1 font-black text-white tabular-nums">{PRODUCT_TERM_DAYS}일</p>
+            </div>
+          </div>
+
+          <p className="mt-4 border-t border-white/10 pt-3 text-[10px] font-black uppercase tracking-widest text-white/35">
+            신뢰할 수 있는 계산 근거
+          </p>
+          <p className="mt-1 text-[11px] leading-relaxed text-white/45">{CALCULATION_DISCLOSURE_SUBTITLE}</p>
+
+          <details className="mt-3 rounded-xl bg-white/5 px-3 py-2 text-[11px] text-white/55">
+            <summary className="cursor-pointer font-bold text-white/65">원금 구성 보기</summary>
+            <ul className="mt-2 space-y-1 pl-3 leading-relaxed">
+              <li>과거 납입 추정: {formatWon(maturitySimulator.pastPrincipal)}</li>
+              <li>오늘 입력: {formatWon(Math.max(0, todayInputWon))}</li>
+              <li>남은 회차 × 하한선: {formatWon(maturitySimulator.futurePrincipal)}</li>
+            </ul>
+          </details>
+
+          <div className="mt-4 border-t border-white/10 pt-3">
+            <p className="text-[10px] font-black uppercase tracking-widest text-kakao-yellow/80">
+              균등 적립 시 참고 (우대 충족)
             </p>
-            <p className="mt-1 text-xs font-bold text-white/55">
-              매일 {formatWon(selectedAmount)} × 180일 · 최대 연 {(MAX_ANNUAL_RATE * 100).toFixed(1)}% (우대 충족)
+            <p className="mt-1 text-xs font-semibold text-white/45">
+              매일 {formatWon(dailyForProjection)} × {PRODUCT_TERM_DAYS}일
             </p>
             <PreferredBonusChecklist luckyWeekdayLabel={luckyWeekdayLabel} variant="dark" />
             <div className="mt-3 flex items-start justify-between gap-3">
@@ -1697,11 +1923,11 @@ function Dashboard({
                 </div>
               </div>
               <p className="max-w-[6.5rem] shrink-0 text-right text-[10px] font-bold leading-snug text-white/35">
-                매회 최소 {(firstRoundDepositAmount ?? selectedAmount).toLocaleString("ko-KR")}원 이상 저축 기준
+                매회 최소 {(firstRoundDepositAmount ?? minDepositLimit).toLocaleString("ko-KR")}원 이상 저축 기준
               </p>
             </div>
-          </section>
-        ) : null}
+          </div>
+        </section>
 
         <section
           className={[
@@ -1778,7 +2004,7 @@ function Dashboard({
             format={shareFormat}
             name={profile.birth_info.name}
             rewardStage={rewardStage}
-            selectedAmount={selectedAmount}
+            selectedAmount={todayInputWon > 0 ? todayInputWon : selectedAmount}
           />
 
           <button
@@ -1919,9 +2145,9 @@ function Dashboard({
         <button
           type="button"
           onClick={() => setShowCancelDefense(true)}
-          className="pb-4 pt-1 text-center text-xs font-bold text-white/30 underline-offset-4 transition hover:text-white/55 active:scale-[0.99]"
+          className="pb-4 pt-1 text-center text-xs font-bold text-white/40 underline decoration-white/25 underline-offset-4 transition hover:text-white/70 hover:decoration-white/40 active:scale-[0.99]"
         >
-          그래도 중도 해지를 검토할래요
+          해지하기
         </button>
       </section>
 
@@ -1962,9 +2188,15 @@ function Dashboard({
 
       <AnimatePresence>
         {showCancelDefense ? (
-          <CancelDefenseModal
+          <RetentionCancelModal
+            displayName={profile.birth_info.name}
             rewardStage={rewardStage}
-            onClose={() => setShowCancelDefense(false)}
+            dailyAmount={selectedAmount ?? 0}
+            onContinue={() => {
+              setShowCancelDefense(false);
+              setRetentionRelightToken((token) => token + 1);
+            }}
+            onConfirmTerminate={() => setShowCancelDefense(false)}
           />
         ) : null}
       </AnimatePresence>
@@ -2102,95 +2334,211 @@ const ShareCard = forwardRef<
   );
 });
 
-function CancelDefenseModal({
+function RetentionCancelModal({
+  displayName,
   rewardStage,
-  onClose,
+  dailyAmount,
+  onContinue,
+  onConfirmTerminate,
 }: {
+  displayName: string;
   rewardStage: number;
-  onClose: () => void;
+  dailyAmount: number;
+  onContinue: () => void;
+  onConfirmTerminate: () => void;
 }) {
+  const [skyPhase, setSkyPhase] = useState<"dim" | "relight">("dim");
   const activeNodes = CONSTELLATION_NODES.slice(0, rewardStage);
-  const nextStage = Math.min(rewardStage + 1, CONSTELLATION_NODES.length);
+  const lastNode = activeNodes.length ? activeNodes[activeNodes.length - 1] : null;
+  const linkedDays = estimateLinkedDaysFromStage(rewardStage);
+  const accumulatedInterest = calcAccumulatedEstimatedInterest(dailyAmount, linkedDays);
+  const bonusInterest = calcMaturityPreferredBonusWon(dailyAmount);
+  const lineOpacity = skyPhase === "dim" ? 0.14 : 0.72;
+  const starOpacity = skyPhase === "dim" ? 0.28 : 1;
+  const starGlow =
+    skyPhase === "dim"
+      ? "0 0 10px rgba(254,229,0,0.25)"
+      : "0 0 26px rgba(254,229,0,1), 0 0 48px rgba(254,229,0,0.55)";
 
-  // 해지 방어 팝업은 완성 직전의 손실 회피 심리를 활용해 이탈 의도를 낮춥니다.
+  const handleContinueUniverse = () => {
+    setSkyPhase("relight");
+    window.setTimeout(onContinue, 720);
+  };
+
   return (
     <motion.div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-5 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="retention-title"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-5 backdrop-blur-md"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
+      transition={{ duration: 0.28 }}
     >
       <motion.section
-        initial={{ opacity: 0, y: 24, scale: 0.96 }}
+        layout
+        initial={{ opacity: 0, y: 28, scale: 0.94 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={{ opacity: 0, y: 16, scale: 0.97 }}
-        transition={{ duration: 0.25 }}
-        className="w-full max-w-sm rounded-[32px] bg-white p-5 text-kakao-black shadow-2xl"
+        exit={{ opacity: 0, y: 18, scale: 0.96 }}
+        transition={{ type: "spring", stiffness: 420, damping: 32 }}
+        className="w-full max-w-sm overflow-hidden rounded-[32px] bg-[#0c1028] p-5 text-white shadow-[0_24px_80px_rgba(0,0,0,0.55)] ring-1 ring-white/10"
       >
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-xs font-black text-neutral-500">해지 전 확인</p>
-            <h2 className="mt-1 text-2xl font-black leading-tight">
-              조금만 더 힘내면
-              <br />
-              다음 성좌가 완성돼요!
-            </h2>
-          </div>
+        <div className="flex items-start justify-between gap-3">
+          <p className="text-[10px] font-black uppercase tracking-[0.2em] text-kakao-yellow/80">
+            Retention
+          </p>
           <button
             type="button"
-            onClick={onClose}
-            className="rounded-full bg-neutral-100 p-2 transition active:scale-95"
+            onClick={handleContinueUniverse}
+            className="rounded-full bg-white/10 p-2 text-white/70 transition hover:bg-white/15 active:scale-95"
+            aria-label="닫고 계속하기"
           >
             <X size={18} />
           </button>
         </div>
 
-        <div className="relative my-5 h-52 overflow-hidden rounded-[28px] bg-[#070B1E]">
-          <div className="absolute inset-x-[-30%] top-1/3 h-24 rotate-[-18deg] bg-gradient-to-r from-transparent via-white/20 to-transparent blur-2xl" />
-          <svg viewBox="0 0 100 100" className="absolute inset-0 h-full w-full">
+        <h2 id="retention-title" className="mt-3 text-2xl font-black leading-snug tracking-tight">
+          정말 이 우주를
+          <br />
+          닫으시겠어요?
+        </h2>
+
+        <div
+          className={[
+            "relative mt-5 h-52 overflow-hidden rounded-[28px] transition-colors duration-700",
+            skyPhase === "dim" ? "bg-[#030510]" : "bg-[#0a1028]",
+          ].join(" ")}
+        >
+          <motion.div
+            className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_50%_35%,rgba(254,229,0,0.12),transparent_55%)]"
+            animate={{ opacity: skyPhase === "dim" ? 0.35 : 1 }}
+            transition={{ duration: 0.65 }}
+          />
+          <motion.div
+            className="pointer-events-none absolute inset-0 bg-neutral-950/60"
+            animate={{ opacity: skyPhase === "dim" ? 0.72 : 0.05 }}
+            transition={{ duration: 0.65 }}
+          />
+
+          <svg viewBox="0 0 100 100" className="absolute inset-0 h-full w-full" aria-hidden>
             {activeNodes.slice(1).map((node, index) => {
               const previousNode = activeNodes[index];
-
               return (
-                <line
+                <motion.line
                   key={`${previousNode.id}-${node.id}`}
                   x1={previousNode.x}
                   y1={previousNode.y}
                   x2={node.x}
                   y2={node.y}
-                  stroke="rgba(254, 229, 0, 0.7)"
-                  strokeWidth="0.8"
+                  stroke="rgba(254, 229, 0, 0.85)"
+                  strokeWidth="0.85"
                   strokeLinecap="round"
+                  animate={{ opacity: lineOpacity }}
+                  transition={{ duration: 0.55 }}
                 />
               );
             })}
           </svg>
-          {activeNodes.map((node) => (
-            <span
-              key={node.id}
-              className="absolute rounded-full bg-kakao-yellow shadow-[0_0_22px_rgba(254,229,0,0.9)]"
+
+          {activeNodes.map((node, index) => {
+            const isLatest = index === activeNodes.length - 1;
+            return (
+              <motion.span
+                key={node.id}
+                className={[
+                  "absolute rounded-full bg-kakao-yellow",
+                  isLatest && skyPhase === "dim" ? "z-[11]" : "",
+                ].join(" ")}
+                style={{
+                  left: `${node.x}%`,
+                  top: `${node.y}%`,
+                  width: node.size + 4,
+                  height: node.size + 4,
+                  marginLeft: -(node.size + 4) / 2,
+                  marginTop: -(node.size + 4) / 2,
+                  boxShadow: starGlow,
+                }}
+                animate={{
+                  opacity: skyPhase === "dim" && isLatest ? 0.35 : starOpacity,
+                  scale: skyPhase === "relight" ? [1, 1.2, 1] : 1,
+                }}
+                transition={{
+                  opacity: { duration: 0.5 },
+                  scale: { duration: 0.68, ease: "easeOut" },
+                }}
+              />
+            );
+          })}
+
+          {lastNode && skyPhase === "dim" ? (
+            <motion.span
+              className="pointer-events-none absolute z-20 rounded-full bg-kakao-yellow/90 shadow-[0_0_18px_rgba(254,229,0,0.95)]"
               style={{
-                left: `${node.x}%`,
-                top: `${node.y}%`,
-                width: node.size + 4,
-                height: node.size + 4,
-                marginLeft: -(node.size + 4) / 2,
-                marginTop: -(node.size + 4) / 2,
+                left: `${lastNode.x}%`,
+                top: `${lastNode.y}%`,
+                width: lastNode.size + 4,
+                height: lastNode.size + 4,
+                marginLeft: -(lastNode.size + 4) / 2,
+                marginTop: -(lastNode.size + 4) / 2,
+              }}
+              aria-hidden
+              animate={{
+                y: [0, 56],
+                opacity: [0.95, 0],
+                rotate: [0, 18],
+              }}
+              transition={{
+                duration: 2.2,
+                repeat: Infinity,
+                repeatDelay: 0.35,
+                ease: [0.4, 0, 0.2, 1],
               }}
             />
-          ))}
+          ) : null}
+
+          {skyPhase === "relight" ? (
+            <motion.div
+              className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_42%,rgba(254,229,0,0.45),transparent_58%)]"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: [0, 1, 0] }}
+              transition={{ duration: 0.85 }}
+            />
+          ) : null}
         </div>
 
-        <p className="text-sm leading-6 text-neutral-600">
-          현재 {rewardStage}단계까지 별자리가 완성됐어요. 다음 저축 한 번이면
-          {nextStage}단계 보상이 열리고, 유지율 보상 그래프에도 긍정적인 기록이 남습니다.
-        </p>
+        <div className="mt-5 space-y-3 text-sm leading-7 text-white/70">
+          <p>
+            <span className="font-bold text-white">{displayName}님</span>이 {linkedDays}일간 정성껏 연결한{" "}
+            <span className="font-black text-kakao-yellow">{rewardStage}단계 성좌</span>와, 지금까지 모인{" "}
+            <span className="font-black text-white">
+              예상 이자 약 {accumulatedInterest.toLocaleString("ko-KR")}원을
+            </span>{" "}
+            놓치게 되는 건 너무 아쉬워요.
+          </p>
+          <p>
+            만기 시 받을 수 있는{" "}
+            <span className="font-black text-kakao-yellow">
+              우대 혜택 {bonusInterest.toLocaleString("ko-KR")}원도
+            </span>{" "}
+            함께 소멸됩니다.
+          </p>
+        </div>
+
+        <motion.button
+          type="button"
+          onClick={handleContinueUniverse}
+          whileTap={{ scale: 0.98 }}
+          className="mt-6 w-full rounded-2xl bg-kakao-yellow py-4 text-base font-black text-kakao-black shadow-[0_14px_40px_rgba(254,229,0,0.35)] transition active:scale-[0.99]"
+        >
+          계속해서 우주 키우기
+        </motion.button>
         <button
           type="button"
-          onClick={onClose}
-          className="mt-5 w-full rounded-2xl bg-kakao-yellow px-4 py-4 font-black transition active:scale-[0.99]"
+          onClick={onConfirmTerminate}
+          className="mt-3 w-full py-3 text-center text-sm font-bold text-white/35 transition hover:text-white/55"
         >
-          계속 이어가기
+          그래도 해지할게요
         </button>
       </motion.section>
     </motion.div>
@@ -2413,7 +2761,7 @@ function MaturityReport({
           </div>
         </section>
         <p className="text-center text-[11px] leading-relaxed text-white/35">
-          매회 최소 금액 이상 저축 및 우대 조건 충족을 가정한 최대 연 {(MAX_ANNUAL_RATE * 100).toFixed(1)}% 최상 시나리오 · 세전 · 단리
+          매회 최소 금액 이상 저축 및 우대 조건 충족을 가정한 최대 연 {(MAX_ANNUAL_RATE * 100).toFixed(1)}% 최상 시나리오 · 세전 · 단리 · {PRODUCT_TERM_DAYS}일
         </p>
 
         <section className="rounded-[32px] border border-kakao-yellow/35 bg-gradient-to-br from-kakao-yellow via-yellow-200 to-amber-500 p-5 text-kakao-black shadow-[0_24px_70px_rgba(254,229,0,0.28)]">
