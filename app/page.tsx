@@ -15,7 +15,6 @@ import {
   Check,
   ChevronDown,
   Download,
-  Gift,
   ShieldCheck,
   Sparkles,
   TrendingUp,
@@ -30,8 +29,8 @@ import {
   LUCKY_DAY_BONUS_RATE,
   FOUR_WEEK_STREAK_BONUS_RATE,
   RATE_SUMMARY_LABEL,
-  CALCULATION_DISCLOSURE_SUBTITLE,
   calcDailySavings,
+  calcMaturityBreakdownPretax,
   estimateLinkedDaysFromStage,
   calcAccumulatedEstimatedInterest,
   calcMaturityPreferredBonusWon,
@@ -39,6 +38,24 @@ import {
   formatMinDepositFloorWarning,
   PRODUCT_TERM_DAYS,
 } from "../utils/financeCalculator";
+import { track_cross_selling_click } from "../utils/analytics";
+import { matchCrossSellRecommendation } from "../constants/recommendations";
+import { FortuneMatcher } from "../components/FortuneMatcher";
+import { CountUpWon } from "../components/CountUpWon";
+import { MaturitySimulator } from "../components/MaturitySimulator";
+import {
+  buildFortuneCurationSummary,
+  buildMaturityCelebrationLine,
+  formatAppliedAnnualRateLine,
+  shortenFortuneLine,
+} from "../utils/stringHelper";
+
+/**
+ * 별자리 적금 단일 앱 화면.
+ * 흐름: 온보딩 → 가입 세레모니 → 대시보드(성좌 8회차·실시간 만기 시뮬) → 만기 리포트.
+ * 사주 큐레이션: 생년월일로 일주(60갑자) 계산 후 `ILJU_OVERRIDES`·케이스(A/B/C)와 상품 카피를 매핑하고,
+ * 우대금리 체크리스트·교차 판매 오퍼와 UX적으로 연결합니다.
+ */
 
 const ROULETTE_MIN_AMOUNT = 3333;
 const ROULETTE_MAX_AMOUNT = 100000;
@@ -101,14 +118,6 @@ const WEEKDAY_LABELS_KO = ["일", "월", "화", "수", "목", "금", "토"] as c
 const getLuckyWeekdayLabel = (birthDate: string) => {
   const d = new Date(`${birthDate}T12:00:00`);
   return WEEKDAY_LABELS_KO[d.getDay()];
-};
-
-const DEMO_PROFILE = {
-  name: "하린",
-  birthDate: "1995-07-07",
-  birthTime: "07:30",
-  gender: "not_specified",
-  amount: 33333,
 };
 
 /**
@@ -256,6 +265,7 @@ const ILJU_OVERRIDES: Record<GanjiName, IljuEntry> = {
   계해: { case: "B", fortune: "빗물이 바다로 돌아가니 해수(亥水) 비겁 기운으로 지출이 흘러나갑니다. 나가는 돈을 꼭 잡아두세요." },
 };
 
+/** Admin 대시보드용 리텐션 막대 차트 데모 값(PRD 목표치 추적용 UI 스켈레톤, 실데이터 연동 전). */
 const RETENTION_METRICS = [
   { label: "1개월", value: 82, color: "bg-cyan-300" },
   { label: "3개월", value: 64, color: "bg-violet-300" },
@@ -390,29 +400,6 @@ function PreferredBonusChecklist({
   );
 }
 
-function CountUp({ target, duration = 500 }: { target: number; duration?: number }) {
-  const [current, setCurrent] = useState(0);
-
-  useEffect(() => {
-    if (target === 0) {
-      setCurrent(0);
-      return;
-    }
-    let animId: number;
-    const start = performance.now();
-    const tick = (now: number) => {
-      const t = Math.min((now - start) / duration, 1);
-      const eased = 1 - Math.pow(1 - t, 3);
-      setCurrent(Math.round(eased * target));
-      if (t < 1) animId = requestAnimationFrame(tick);
-    };
-    animId = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(animId);
-  }, [target, duration]);
-
-  return <>{current.toLocaleString("ko-KR")}원</>;
-}
-
 /**
  * 그레고리력 생년월일 → 일주(60갑자) 계산
  * Julian Day Number(JDN)를 이용한 전통 만세력 방식.
@@ -462,9 +449,19 @@ const getSajuData = (birthDate: string): NonNullable<UserProfile["birth_info"]["
 const getFortuneCuration = (birthInfo: UserProfile["birth_info"]) => {
   const saju = birthInfo.saju ?? getSajuData(birthInfo.birth_date);
   const dayPillar = saju.day_pillar as GanjiName;
-  const { curationCase, fortune, productName, benefit, customMessage, caseDescription, rate, period } =
+  const { curationCase, fortune: fortuneRaw, productName, benefit, customMessage, rate, period } =
     getIljuCuration(dayPillar);
   const sajuScore = 85 + (SIXTY_GANJI.indexOf(dayPillar) * 7 + 13) % 15;
+  const fortune = shortenFortuneLine(fortuneRaw);
+  const message =
+    customMessage != null
+      ? shortenFortuneLine(customMessage, 108)
+      : buildFortuneCurationSummary({
+          name: birthInfo.name,
+          productName,
+          curationCase,
+        });
+
   return {
     title: productName,
     benefit,
@@ -474,20 +471,18 @@ const getFortuneCuration = (birthInfo: UserProfile["birth_info"]) => {
     rate,
     period,
     sajuScore,
-    message:
-      customMessage ??
-      `${birthInfo.name}님(${dayPillar} 일주), 이번 달은 ${saju.monthly_flow}가 많아 ${saju.risk_signal}를 조심해야 하네요. 그래서 ${dayPillar} 일주의 ${caseDescription} 기운을 지켜줄 ${productName}을 준비했어요.`,
+    message,
   };
 };
 
-// 포트폴리오 평가자가 별도 입력 없이 핵심 흐름을 확인하도록 데모 데이터를 기본 주입합니다.
+// 온보딩 초기값은 비워 두며, 가입 조건을 충족해야 다음 단계로 진행합니다.
 export default function Home() {
-  const [name, setName] = useState(DEMO_PROFILE.name);
-  const [birthDate, setBirthDate] = useState(DEMO_PROFILE.birthDate);
-  const [birthTime, setBirthTime] = useState(DEMO_PROFILE.birthTime);
-  const [gender, setGender] = useState(DEMO_PROFILE.gender);
+  const [name, setName] = useState("");
+  const [birthDate, setBirthDate] = useState("");
+  const [birthTime, setBirthTime] = useState("");
+  const [gender, setGender] = useState("");
   const [unknownBirthTime, setUnknownBirthTime] = useState(false);
-  const [selectedAmount, setSelectedAmount] = useState<number | null>(DEMO_PROFILE.amount);
+  const [selectedAmount, setSelectedAmount] = useState<number | null>(null);
   const [hasResult, setHasResult] = useState(false);
   const [pendingProfile, setPendingProfile] = useState<UserProfile | null>(null);
   const [showCeremony, setShowCeremony] = useState(false);
@@ -526,7 +521,7 @@ export default function Home() {
 
     await animateRouletteToAmount(rouletteControls, rouletteRotationRef, generatedAmount);
     setSelectedAmount(generatedAmount);
-    setFortuneMessage(`${name.trim() || "하린"}님의 오늘 행운 금액: ${formatWon(generatedAmount)}`);
+    setFortuneMessage(`${name.trim() || "회원"}님의 오늘 행운 금액: ${formatWon(generatedAmount)}`);
     setResultBurstKey((current) => current + 1);
     setHasResult(true);
     setIsRecommending(false);
@@ -806,7 +801,7 @@ export default function Home() {
                     >
                       <p className="text-xs font-black text-kakao-yellow">행운 금액</p>
                       <p className="mt-1 text-2xl font-black text-kakao-yellow">
-                        <CountUp key={`burst-${resultBurstKey}`} target={selectedAmount} duration={800} />
+                        <CountUpWon key={`burst-${resultBurstKey}`} target={selectedAmount} duration={800} />
                       </p>
                     </motion.div>
                   </motion.div>
@@ -850,9 +845,9 @@ export default function Home() {
                   transition={{ duration: 0.35 }}
                   className="mt-3 text-center text-sm text-white/65"
                 >
-                  {name.trim() || "하린"}님의 오늘 행운 금액:{" "}
+                  {name.trim() || "회원"}님의 오늘 행운 금액:{" "}
                   <span className="font-black text-kakao-yellow">
-                    <CountUp key={`label-${resultBurstKey}`} target={selectedAmount} duration={800} />
+                    <CountUpWon key={`label-${resultBurstKey}`} target={selectedAmount} duration={800} />
                   </span>
                 </motion.p>
               ) : (
@@ -871,8 +866,6 @@ export default function Home() {
 
             <AnimatePresence>
               {hasResult && selectedAmount ? (() => {
-                const luckyWd = birthDate ? getLuckyWeekdayLabel(birthDate) : "월";
-                const { principal, interest } = calcDailySavings(selectedAmount);
                 const onboardPred = computeRealtimeMaturityPrediction({
                   rewardStage: 1,
                   todayDepositAmount: selectedAmount,
@@ -896,52 +889,29 @@ export default function Home() {
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: 8 }}
                     transition={{ duration: 0.45, delay: 0.3, ease: "easeOut" }}
-                    className="mt-4 rounded-2xl border border-white/10 bg-white/5 px-5 py-4"
+                    className="mt-4 rounded-2xl border border-white/10 bg-white/5 px-5 py-5"
                   >
-                    <p className="mb-3 text-center text-[11px] font-medium text-white/45">
-                      매일 {formatWon(selectedAmount)} × {PRODUCT_TERM_DAYS}일 납입 시 · 우대 모두 충족 가정 · 세전 · 최상 시나리오
+                    <p className="text-center text-[11px] font-semibold leading-snug text-white/65">
+                      {formatAppliedAnnualRateLine(
+                        onboardPred.effectiveAnnualRate,
+                        BASE_ANNUAL_RATE,
+                        onboardPred.accruedPreferredBonusRate,
+                      )}
                     </p>
-                    <p className="mb-3 text-center text-xs font-black text-kakao-yellow">
-                      최대 연 {(MAX_ANNUAL_RATE * 100).toFixed(1)}%
+                    <p className="mt-5 text-center text-[10px] font-bold text-white/40">예상 만기 수령액 · 세전</p>
+                    <p className="mt-1 text-center text-3xl font-black tabular-nums text-emerald-300">
+                      <CountUpWon
+                        key={`onboard-total-${selectedAmount}`}
+                        target={onboardPred.projectedMaturityTotalPretax}
+                        duration={640}
+                      />
                     </p>
-                    <PreferredBonusChecklist luckyWeekdayLabel={luckyWd} variant="dark" />
-                    <div className="mt-4 flex items-start justify-between gap-3">
-                      <div className="flex flex-1 items-center justify-center gap-4">
-                        <div className="text-center">
-                          <p className="text-[10px] uppercase tracking-widest text-white/35">예상 원금</p>
-                          <p className="mt-1 text-base font-black text-white">
-                            <CountUp key={`principal-${selectedAmount}`} target={principal} />
-                          </p>
-                        </div>
-                        <div className="text-xl font-light text-white/25">+</div>
-                        <div className="text-center">
-                          <p className="text-[10px] uppercase tracking-widest text-kakao-yellow/60">이자 (세전)</p>
-                          <p className="mt-1 text-base font-black text-kakao-yellow">
-                            <CountUp key={`interest-${selectedAmount}`} target={interest} />
-                          </p>
-                        </div>
+                    <div className="mt-6">
+                      <div className="mb-1.5 flex justify-between text-[10px] font-bold text-white/35">
+                        <span>낮은 금액 기준</span>
+                        <span>높은 금액 기준</span>
                       </div>
-                      <p className="max-w-[7.5rem] shrink-0 pt-1 text-right text-[10px] font-bold leading-snug text-white/35">
-                        매회 최소 {selectedAmount.toLocaleString("ko-KR")}원 이상 저축 기준
-                      </p>
-                    </div>
-
-                    <div className="mt-5 border-t border-white/10 pt-4">
-                      <div className="flex items-end justify-between gap-2">
-                        <div>
-                          <p className="text-[10px] font-black uppercase tracking-widest text-kakao-yellow/80">
-                            만기 달성 예측
-                          </p>
-                          <p className="mt-1 text-[11px] text-white/45">
-                            원금 {formatWon(onboardPred.projectedTotalPrincipal)} + 이자{" "}
-                            {formatWon(onboardPred.projectedInterestPretax)}
-                          </p>
-                        </div>
-                        <p className="text-lg font-black text-emerald-300 tabular-nums">
-                          {formatWon(onboardPred.projectedMaturityTotalPretax)}
-                        </p>
-                      </div>
-                      <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/10">
+                      <div className="h-2 overflow-hidden rounded-full bg-white/10">
                         <motion.div
                           className="h-full rounded-full bg-gradient-to-r from-kakao-yellow to-emerald-400"
                           initial={false}
@@ -949,16 +919,9 @@ export default function Home() {
                           transition={{ type: "spring", stiffness: 320, damping: 28 }}
                         />
                       </div>
-                      <p className="mt-3 text-[10px] font-black uppercase tracking-widest text-white/35">
-                        신뢰할 수 있는 계산 근거
-                      </p>
-                      <p className="mt-1 text-[11px] leading-relaxed text-white/45">
-                        {CALCULATION_DISCLOSURE_SUBTITLE}
-                      </p>
                     </div>
-
-                    <p className="mt-3 text-center text-[10px] text-white/25">
-                      6개월 만기 예상 수령액 · 세전 · 단리 기준
+                    <p className="mt-4 text-center text-[10px] text-white/35">
+                      매일 {formatWon(selectedAmount)} × {PRODUCT_TERM_DAYS}일 · 우대 충족 가정
                     </p>
                   </motion.div>
                 );
@@ -1051,16 +1014,17 @@ function ProductBottomSheet({
           <div className="grid grid-cols-3 gap-3">
             <div className="rounded-2xl bg-kakao-gray p-3 text-center">
               <p className="text-[10px] font-bold text-neutral-400">금리</p>
-              <p className="mt-1 text-sm font-black leading-tight text-kakao-black">
-                {curation.curationCase === "C"
-                  ? `최대 연 ${(MAX_ANNUAL_RATE * 100).toFixed(1)}%`
-                  : curation.rate}
-              </p>
               {curation.curationCase === "C" ? (
-                <p className="mt-1 text-[10px] font-semibold leading-snug text-neutral-500">
-                  기본 {(BASE_ANNUAL_RATE * 100).toFixed(1)}% + 우대 최대 {(MAX_PREFERRED_BONUS_RATE * 100).toFixed(1)}%p
+                <p className="mt-1 text-[10px] font-black leading-snug text-kakao-black">
+                  {formatAppliedAnnualRateLine(
+                    MAX_ANNUAL_RATE,
+                    BASE_ANNUAL_RATE,
+                    MAX_PREFERRED_BONUS_RATE,
+                  )}
                 </p>
-              ) : null}
+              ) : (
+                <p className="mt-1 text-sm font-black leading-tight text-kakao-black">{curation.rate}</p>
+              )}
             </div>
             <div className="rounded-2xl bg-kakao-gray p-3 text-center">
               <p className="text-[10px] font-bold text-neutral-400">기간</p>
@@ -1084,7 +1048,7 @@ function ProductBottomSheet({
           {curation.curationCase === "C" ? (
             <div className="rounded-2xl border border-neutral-100 bg-white px-4 py-3">
               <p className="text-[10px] font-black uppercase tracking-widest text-neutral-400">
-                우대 조건 · 최상 시나리오
+                우대 조건
               </p>
               <PreferredBonusChecklist
                 luckyWeekdayLabel={getLuckyWeekdayLabel(birthDate)}
@@ -1094,7 +1058,7 @@ function ProductBottomSheet({
           ) : null}
 
           {/* 개인화 설명 */}
-          <p className="text-sm leading-6 text-neutral-500">{curation.message}</p>
+          <p className="text-sm leading-snug text-neutral-600">{curation.message}</p>
 
           <button
             type="button"
@@ -1286,6 +1250,26 @@ function Dashboard({
   const isAuroraStage = rewardStage >= 5;
   const isGrandFinale = rewardStage >= 8;
   const curation = getFortuneCuration(profile.birth_info);
+  const crossSellOffer = useMemo(
+    () =>
+      matchCrossSellRecommendation({
+        userName: profile.birth_info.name,
+        dayPillar: curation.dayPillar,
+        curationCase: curation.curationCase,
+      }),
+    [profile.birth_info.name, curation.dayPillar, curation.curationCase],
+  );
+
+  const crossSellDailyKey = useMemo(() => {
+    if (!crossSellOffer) {
+      return null;
+    }
+    const d = new Date();
+    const dayKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    return `kakao_cross_sell_${profile.user_id}_${crossSellOffer.id}_${dayKey}`;
+  }, [crossSellOffer, profile.user_id]);
+
+  const [showCrossSellSheet, setShowCrossSellSheet] = useState(false);
   const luckyWeekdayLabel = getLuckyWeekdayLabel(profile.birth_info.birth_date);
   const particleDensity = isConstellationStage ? MILKY_WAY_PARTICLES : MILKY_WAY_PARTICLES.slice(0, 28);
   const cardSurfaceClass = isAuroraStage
@@ -1297,6 +1281,55 @@ function Dashboard({
       setTodayInputWon(selectedAmount);
     }
   }, [selectedAmount]);
+
+  useEffect(() => {
+    if (!crossSellOffer || !crossSellDailyKey || typeof window === "undefined") {
+      return;
+    }
+    if (sessionStorage.getItem(crossSellDailyKey)) {
+      return;
+    }
+    sessionStorage.setItem(crossSellDailyKey, "impressed");
+    track_cross_selling_click("impression", {
+      offer_id: crossSellOffer.id,
+      partner: crossSellOffer.partner,
+      fortune_tags: crossSellOffer.fortune_tags,
+      product_title: crossSellOffer.productTitle,
+    });
+    setShowCrossSellSheet(true);
+  }, [crossSellOffer, crossSellDailyKey]);
+
+  const handleCrossSellDismiss = () => {
+    if (crossSellOffer) {
+      track_cross_selling_click("dismiss", {
+        offer_id: crossSellOffer.id,
+        partner: crossSellOffer.partner,
+        fortune_tags: crossSellOffer.fortune_tags,
+        product_title: crossSellOffer.productTitle,
+      });
+    }
+    setShowCrossSellSheet(false);
+  };
+
+  const handleCrossSellPrimary = () => {
+    if (crossSellOffer) {
+      track_cross_selling_click("cta_click", {
+        offer_id: crossSellOffer.id,
+        partner: crossSellOffer.partner,
+        fortune_tags: crossSellOffer.fortune_tags,
+        product_title: crossSellOffer.productTitle,
+      });
+    }
+    setShowCrossSellSheet(false);
+  };
+
+  const handleStickyLuckyInvest = () => {
+    if (crossSellOffer) {
+      setShowCrossSellSheet(true);
+      return;
+    }
+    setShowProductModal(true);
+  };
 
   const maturitySimulator = useMemo(
     () =>
@@ -1432,15 +1465,32 @@ function Dashboard({
   };
 
   const dailyForProjection = todayInputWon > 0 ? todayInputWon : (selectedAmount ?? 0);
-  const { principal: maturityPrincipal, interest: maturityInterest } = calcDailySavings(dailyForProjection);
+  const maturityBreakdown = useMemo(
+    () => calcMaturityBreakdownPretax(dailyForProjection),
+    [dailyForProjection],
+  );
 
   // 만기 리포트는 Grand Finale 직후 노출해 감정적 피크에서 교차 판매 제안을 연결합니다.
   if (showReport) {
     return (
       <MaturityReport
         profile={profile}
-        totalPrincipal={maturityPrincipal}
-        interest={maturityInterest}
+        principalPretax={maturityBreakdown.principalPretax}
+        interestPretax={maturityBreakdown.interestPretax}
+        totalPretax={maturityBreakdown.totalPretax}
+        onReinvest={() => {
+          setShowReport(false);
+          if (crossSellOffer) {
+            setShowCrossSellSheet(true);
+          } else {
+            setShowProductModal(true);
+          }
+        }}
+        onRestart={() => {
+          setShowReport(false);
+          setRewardStage(INITIAL_SAVING_STEP);
+          setFirstRoundDepositAmount(null);
+        }}
       />
     );
   }
@@ -1498,7 +1548,7 @@ function Dashboard({
         ) : null}
       </div>
 
-      <section className="relative z-10 mx-auto flex min-h-[calc(100vh-48px)] w-full max-w-md flex-col gap-5">
+      <section className="relative z-10 mx-auto flex min-h-[calc(100vh-48px)] w-full max-w-md flex-col gap-7 pb-28">
         <header className={`rounded-[32px] p-5 shadow-2xl backdrop-blur transition duration-700 ${cardSurfaceClass}`}>
           <div className="mb-5 flex items-center justify-between">
             <span className="rounded-full bg-kakao-yellow px-4 py-2 text-sm font-black text-kakao-black">
@@ -1523,7 +1573,7 @@ function Dashboard({
 
         <section
           className={[
-            "relative h-[360px] overflow-hidden rounded-[32px] border p-4 shadow-2xl transition duration-700",
+            "relative mt-1 h-[384px] overflow-hidden rounded-[32px] border p-5 shadow-2xl transition duration-700",
             isAuroraStage
               ? "border-cyan-200/20 bg-gradient-to-br from-slate-950/70 via-violet-950/50 to-cyan-950/30"
               : "border-white/10 bg-slate-950/55",
@@ -1743,7 +1793,7 @@ function Dashboard({
                     >
                       <p className="text-[10px] font-black text-kakao-yellow">행운 금액</p>
                       <p className="mt-0.5 text-lg font-black text-kakao-yellow">
-                        <CountUp key={`dash-burst-${dashboardBurstKey}`} target={selectedAmount} duration={700} />
+                        <CountUpWon key={`dash-burst-${dashboardBurstKey}`} target={selectedAmount} duration={700} />
                       </p>
                     </motion.div>
                   </motion.div>
@@ -1830,104 +1880,19 @@ function Dashboard({
           </div>
         </section>
 
-        <section className={`rounded-[28px] border border-white/15 p-4 backdrop-blur transition duration-700 ${cardSurfaceClass}`}>
-          <div className="flex flex-wrap items-end justify-between gap-3">
-            <div>
-              <p className="text-[10px] font-black uppercase tracking-widest text-kakao-yellow/90">
-                만기 달성 예측 · 실시간
-              </p>
-              <p className="mt-1 text-xs font-semibold text-white/55">
-                세전 · 연 {(maturitySimulator.effectiveAnnualRate * 100).toFixed(2)}% 적용 (기본 {(BASE_ANNUAL_RATE * 100).toFixed(1)}% + 우대{" "}
-                {(maturitySimulator.accruedPreferredBonusRate * 100).toFixed(2)}%p)
-              </p>
-            </div>
-            <div className="text-right">
-              <p className="text-[10px] font-bold text-white/35">예상 만기 수령액</p>
-              <p
-                className={[
-                  "mt-0.5 text-xl font-black tabular-nums",
-                  meetsFloorPositive ? "text-emerald-300" : "text-white",
-                ].join(" ")}
-              >
-                {formatWon(maturitySimulator.projectedMaturityTotalPretax)}
-              </p>
-            </div>
-          </div>
-
-          <div className="mt-4">
-            <div className="mb-1.5 flex justify-between text-[10px] font-bold text-white/40">
-              <span>하한선만 넣을 때</span>
-              <span>목표 가속</span>
-            </div>
-            <div className="h-3 overflow-hidden rounded-full bg-white/10">
-              <motion.div
-                className="h-full rounded-full bg-gradient-to-r from-kakao-yellow via-emerald-300 to-cyan-300"
-                initial={false}
-                animate={{ width: `${predictorProgressPct}%` }}
-                transition={{ type: "spring", stiffness: 320, damping: 28 }}
-              />
-            </div>
-          </div>
-
-          <div className="mt-4 grid grid-cols-3 gap-2 text-center text-[10px]">
-            <div className="rounded-xl bg-white/5 px-2 py-2">
-              <p className="font-bold text-white/35">누적·미래 원금</p>
-              <p className="mt-1 font-black text-white tabular-nums">
-                {formatWon(maturitySimulator.projectedTotalPrincipal)}
-              </p>
-            </div>
-            <div className="rounded-xl bg-white/5 px-2 py-2">
-              <p className="font-bold text-white/35">예상 이자</p>
-              <p className="mt-1 font-black text-kakao-yellow tabular-nums">
-                {formatWon(maturitySimulator.projectedInterestPretax)}
-              </p>
-            </div>
-            <div className="rounded-xl bg-white/5 px-2 py-2">
-              <p className="font-bold text-white/35">만기 일수</p>
-              <p className="mt-1 font-black text-white tabular-nums">{PRODUCT_TERM_DAYS}일</p>
-            </div>
-          </div>
-
-          <p className="mt-4 border-t border-white/10 pt-3 text-[10px] font-black uppercase tracking-widest text-white/35">
-            신뢰할 수 있는 계산 근거
-          </p>
-          <p className="mt-1 text-[11px] leading-relaxed text-white/45">{CALCULATION_DISCLOSURE_SUBTITLE}</p>
-
-          <details className="mt-3 rounded-xl bg-white/5 px-3 py-2 text-[11px] text-white/55">
-            <summary className="cursor-pointer font-bold text-white/65">원금 구성 보기</summary>
-            <ul className="mt-2 space-y-1 pl-3 leading-relaxed">
-              <li>과거 납입 추정: {formatWon(maturitySimulator.pastPrincipal)}</li>
-              <li>오늘 입력: {formatWon(Math.max(0, todayInputWon))}</li>
-              <li>남은 회차 × 하한선: {formatWon(maturitySimulator.futurePrincipal)}</li>
-            </ul>
-          </details>
-
-          <div className="mt-4 border-t border-white/10 pt-3">
-            <p className="text-[10px] font-black uppercase tracking-widest text-kakao-yellow/80">
-              균등 적립 시 참고 (우대 충족)
-            </p>
-            <p className="mt-1 text-xs font-semibold text-white/45">
-              매일 {formatWon(dailyForProjection)} × {PRODUCT_TERM_DAYS}일
-            </p>
-            <PreferredBonusChecklist luckyWeekdayLabel={luckyWeekdayLabel} variant="dark" />
-            <div className="mt-3 flex items-start justify-between gap-3">
-              <div className="flex flex-1 items-center justify-center gap-3">
-                <div className="text-center">
-                  <p className="text-[10px] text-white/40">예상 원금</p>
-                  <p className="mt-1 text-sm font-black text-white">{formatWon(maturityPrincipal)}</p>
-                </div>
-                <span className="text-white/25">+</span>
-                <div className="text-center">
-                  <p className="text-[10px] text-kakao-yellow/55">이자</p>
-                  <p className="mt-1 text-sm font-black text-kakao-yellow">{formatWon(maturityInterest)}</p>
-                </div>
-              </div>
-              <p className="max-w-[6.5rem] shrink-0 text-right text-[10px] font-bold leading-snug text-white/35">
-                매회 최소 {(firstRoundDepositAmount ?? minDepositLimit).toLocaleString("ko-KR")}원 이상 저축 기준
-              </p>
-            </div>
-          </div>
-        </section>
+        <MaturitySimulator
+          maturitySimulator={maturitySimulator}
+          predictorProgressPct={predictorProgressPct}
+          meetsFloorPositive={meetsFloorPositive}
+          dailyForProjection={dailyForProjection}
+          maturityPrincipal={maturityBreakdown.principalPretax}
+          maturityInterest={maturityBreakdown.interestPretax}
+          luckyWeekdayLabel={luckyWeekdayLabel}
+          firstRoundDepositAmount={firstRoundDepositAmount}
+          minDepositLimit={minDepositLimit}
+          todayInputWon={todayInputWon}
+          formatWon={formatWon}
+        />
 
         <section
           className={[
@@ -1966,9 +1931,8 @@ function Dashboard({
                 transition={{ duration: 0.28, ease: "easeInOut" }}
                 className="overflow-hidden"
               >
-                <p className="mt-4 border-t border-neutral-100 pt-4 text-sm leading-6 text-neutral-600">
-                  오늘은 큰 결정보다 반복 가능한 작은 저축이 재물운을 끌어올립니다.
-                  정한 금액을 지키면 다음 별이 더 밝게 연결될 거예요.
+                <p className="mt-4 border-t border-neutral-100 pt-4 text-sm leading-snug text-neutral-600">
+                  오늘은 작은 저축 루틴이 재물운을 붙잡아 줘요. 정한 금액만 지켜도 다음 별이 더 밝아져요.
                 </p>
               </motion.div>
             ) : null}
@@ -2006,15 +1970,6 @@ function Dashboard({
             rewardStage={rewardStage}
             selectedAmount={todayInputWon > 0 ? todayInputWon : selectedAmount}
           />
-
-          <button
-            type="button"
-            onClick={handleSaveShareCard}
-            className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-white px-4 py-4 font-black text-kakao-black transition active:scale-[0.99]"
-          >
-            <Download size={19} />
-            이미지로 저장하기
-          </button>
         </section>
 
         <motion.section
@@ -2035,8 +1990,8 @@ function Dashboard({
               className="mb-4 flex items-start justify-between gap-3"
             >
               <div>
-                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-kakao-yellow/80">
-                  Fortune-Based Curation
+                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-kakao-yellow/80">
+                  오늘의 맞춤 큐레이션
                 </p>
                 <h3 className="mt-1 text-xl font-black leading-tight">오늘의 기운에 딱 맞는 저축 추천</h3>
               </div>
@@ -2072,21 +2027,9 @@ function Dashboard({
               <p className="mb-1 text-[10px] font-black uppercase tracking-widest text-white/35">
                 오늘의 재물운
               </p>
-              <p className="text-sm font-semibold leading-6 text-white/85">
-                {curation.fortune}
-              </p>
+              <p className="text-sm font-semibold leading-snug text-white/85">{curation.fortune}</p>
+              <p className="mt-2 text-xs font-medium leading-snug text-white/65">{curation.message}</p>
             </motion.div>
-
-            {/* 큐레이션 메시지 */}
-            <motion.p
-              initial={{ opacity: 0 }}
-              whileInView={{ opacity: 1 }}
-              viewport={{ once: true }}
-              transition={{ duration: 0.35, delay: 0.32 }}
-              className="mb-4 text-sm leading-6 text-white/55"
-            >
-              {curation.message}
-            </motion.p>
 
             {/* 추천 상품 카드 */}
             <motion.div
@@ -2101,31 +2044,20 @@ function Dashboard({
                 <div className="flex-1">
                   <p className="text-xl font-black leading-tight">{curation.title}</p>
                   {curation.curationCase === "C" ? (
-                    <>
-                      <p className="mt-1.5 text-xl font-black text-kakao-yellow">
-                        최대 연 {(MAX_ANNUAL_RATE * 100).toFixed(1)}%
-                      </p>
-                      <p className="mt-1 text-xs font-bold text-white/50">
-                        기본 {(BASE_ANNUAL_RATE * 100).toFixed(1)}% + 우대 최대 {(MAX_PREFERRED_BONUS_RATE * 100).toFixed(1)}%p
-                      </p>
-                    </>
+                    <p className="mt-1.5 text-xs font-black leading-snug text-kakao-yellow">
+                      {formatAppliedAnnualRateLine(
+                        MAX_ANNUAL_RATE,
+                        BASE_ANNUAL_RATE,
+                        MAX_PREFERRED_BONUS_RATE,
+                      )}
+                    </p>
                   ) : (
                     <p className="mt-1.5 text-base font-black text-kakao-yellow">{curation.rate}</p>
                   )}
-                  <p className="mt-1 text-xs font-semibold text-white/45">
-                    {curation.benefit}
-                  </p>
+                  <p className="mt-1 text-xs font-semibold text-white/45">{curation.benefit}</p>
                 </div>
                 <ShieldCheck className="mt-0.5 shrink-0 text-kakao-yellow" size={28} />
               </div>
-              {curation.curationCase === "C" ? (
-                <div className="mt-4 border-t border-white/10 pt-3">
-                  <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-white/40">
-                    우대 조건 (체크 시 최대 금리)
-                  </p>
-                  <PreferredBonusChecklist luckyWeekdayLabel={luckyWeekdayLabel} variant="dark" />
-                </div>
-              ) : null}
             </motion.div>
 
             <motion.button
@@ -2150,6 +2082,27 @@ function Dashboard({
           해지하기
         </button>
       </section>
+
+      <div className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-[#070B1E]/94 pb-6 pt-3 backdrop-blur-xl">
+        <div className="mx-auto flex w-full max-w-md gap-3 px-5">
+          <button
+            type="button"
+            onClick={handleStickyLuckyInvest}
+            className="flex flex-1 items-center justify-center gap-2 rounded-2xl bg-kakao-yellow py-3.5 text-sm font-black text-kakao-black shadow-lg transition active:scale-[0.99]"
+          >
+            <TrendingUp size={18} strokeWidth={2.4} />
+            행운 투자하기
+          </button>
+          <button
+            type="button"
+            onClick={handleSaveShareCard}
+            className="flex flex-1 items-center justify-center gap-2 rounded-2xl border border-white/20 bg-white/10 py-3.5 text-sm font-black text-white transition active:scale-[0.99]"
+          >
+            <Download size={18} strokeWidth={2.4} />
+            이미지 저장하기
+          </button>
+        </div>
+      </div>
 
       <PortfolioTimeMachine
         rewardStage={rewardStage}
@@ -2206,6 +2159,15 @@ function Dashboard({
             curation={curation}
             birthDate={profile.birth_info.birth_date}
             onClose={() => setShowProductModal(false)}
+          />
+        ) : null}
+      </AnimatePresence>
+      <AnimatePresence>
+        {showCrossSellSheet && crossSellOffer ? (
+          <FortuneMatcher
+            recommendation={crossSellOffer}
+            onClose={handleCrossSellDismiss}
+            onPrimaryAction={handleCrossSellPrimary}
           />
         ) : null}
       </AnimatePresence>
@@ -2690,110 +2652,276 @@ function AdminDashboard({ onBack }: { onBack: () => void }) {
   );
 }
 
+const MATURITY_COUNT_DURATION_MS = 820;
+const MATURITY_COUNT_DELAY_MS = 560;
+
+function MaturityKeepsakeCard({
+  name,
+  totalPretax,
+}: {
+  name: string;
+  totalPretax: number;
+}) {
+  const activeNodes = CONSTELLATION_NODES;
+
+  return (
+    <div className="relative w-full overflow-hidden rounded-2xl border border-neutral-200/90 bg-gradient-to-br from-white via-[#fafafa] to-[#fff9e6] p-5 text-[#191919] shadow-sm ring-1 ring-black/[0.04]">
+      <div className="absolute inset-0 opacity-[0.35]">
+        <div className="absolute -left-8 top-8 h-36 w-36 rounded-full bg-[#FFE600]/25 blur-3xl" />
+        <div className="absolute bottom-6 right-[-24px] h-40 w-40 rounded-full bg-neutral-200/80 blur-3xl" />
+      </div>
+
+      <div className="relative z-10 flex flex-col">
+        <div className="flex items-center justify-between">
+          <span className="rounded-full bg-[#FFE600] px-3 py-1.5 text-[11px] font-bold text-[#191919] shadow-sm">
+            만기 축하 혜택
+          </span>
+          <span className="text-xs font-bold text-neutral-500">만기 기념 카드</span>
+        </div>
+
+        <div className="relative mx-auto my-4 h-[132px] w-full max-w-[220px]">
+          <svg viewBox="0 0 100 100" className="absolute inset-0 h-full w-full" aria-hidden>
+            {activeNodes.slice(1).map((node, index) => {
+              const previousNode = activeNodes[index];
+              return (
+                <line
+                  key={`keep-${previousNode.id}-${node.id}`}
+                  x1={previousNode.x}
+                  y1={previousNode.y}
+                  x2={node.x}
+                  y2={node.y}
+                  stroke="rgba(25, 25, 25, 0.14)"
+                  strokeWidth="0.85"
+                  strokeLinecap="round"
+                />
+              );
+            })}
+          </svg>
+          {activeNodes.map((node) => (
+            <span
+              key={`keep-star-${node.id}`}
+              className="absolute rounded-full bg-[#FFE600] shadow-[0_0_16px_rgba(255,230,0,0.55)] ring-2 ring-white/90"
+              style={{
+                left: `${node.x}%`,
+                top: `${node.y}%`,
+                width: node.size + 3,
+                height: node.size + 3,
+                marginLeft: -(node.size + 3) / 2,
+                marginTop: -(node.size + 3) / 2,
+              }}
+            />
+          ))}
+        </div>
+
+        <div className="rounded-2xl border border-neutral-100 bg-white/90 px-4 py-3 shadow-sm">
+          <p className="text-[11px] font-bold text-neutral-500">
+            {name}님 · 총 완성 금액 <span className="text-neutral-400">(세전)</span>
+          </p>
+          <p className="mt-1 text-xl font-bold tracking-tight tabular-nums text-[#191919]">
+            <CountUpWon
+              target={totalPretax}
+              duration={MATURITY_COUNT_DURATION_MS}
+              delayMs={MATURITY_COUNT_DELAY_MS}
+            />
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function MaturityReport({
   profile,
-  totalPrincipal,
-  interest,
+  principalPretax,
+  interestPretax,
+  totalPretax,
+  onReinvest,
+  onRestart,
 }: {
   profile: UserProfile;
-  totalPrincipal: number;
-  interest: number;
+  principalPretax: number;
+  interestPretax: number;
+  totalPretax: number;
+  onReinvest: () => void;
+  onRestart: () => void;
 }) {
-  const totalAmount = totalPrincipal + interest;
+  const name = profile.birth_info.name;
+  const celebration = buildMaturityCelebrationLine(name);
+  const activeNodes = CONSTELLATION_NODES;
 
-  // 만기 리포트는 6개월 성취를 숫자와 스킨 보상으로 동시에 증명하는 포트폴리오 엔딩입니다.
   return (
     <motion.main
       initial={{ opacity: 0, x: 24 }}
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: -24 }}
       transition={{ duration: 0.34, ease: "easeOut" }}
-      className="relative min-h-screen overflow-hidden bg-[radial-gradient(circle_at_50%_0%,rgba(254,229,0,0.24),transparent_32%),linear-gradient(180deg,#120B2E_0%,#070B1E_48%,#03040B_100%)] px-5 py-6 text-white"
+      className="relative min-h-screen overflow-hidden bg-gradient-to-b from-[#0e1324] via-[#070b1e] to-[#03040b] px-5 py-6 pb-40 text-white"
     >
-      <div className="pointer-events-none absolute inset-0">
-        <div className="grand-galaxy absolute left-1/2 top-[20%] h-96 w-96 -translate-x-1/2 rounded-full opacity-85" />
-        <div className="aurora-ribbon absolute inset-x-[-25%] top-0 h-44 opacity-80" />
+      <div className="pointer-events-none absolute inset-0 opacity-70">
+        <div className="absolute left-1/2 top-[12%] h-80 w-80 -translate-x-1/2 rounded-full bg-[#FFE600]/10 blur-3xl" />
       </div>
 
-      <section className="relative z-10 mx-auto flex min-h-[calc(100vh-48px)] w-full max-w-md flex-col gap-5">
-        <header className="rounded-[32px] border border-kakao-yellow/30 bg-white/10 p-6 shadow-2xl backdrop-blur">
-          <span className="inline-flex rounded-full bg-kakao-yellow px-4 py-2 text-sm font-black text-kakao-black">
-            최종 행운 리포트
-          </span>
-          <h1 className="mt-5 text-3xl font-black leading-tight">
-            {profile.birth_info.name}님,
-            <br />
-            당신은 정말 대단한 사람이에요!
-          </h1>
-          <p className="mt-3 text-sm leading-6 text-white/65">
-            6개월 동안 이어온 저축의 별들이 하나의 은하계로 완성됐습니다.
+      <section className="relative z-10 mx-auto flex min-h-[min(100vh-8rem,760px)] w-full max-w-md flex-col justify-center gap-5">
+        <div className="rounded-2xl bg-white p-5 text-[#191919] shadow-sm ring-1 ring-neutral-200/90">
+          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-neutral-400">
+            만기 리포트
           </p>
-        </header>
+          <p className="mt-2 text-sm font-semibold leading-snug text-neutral-600">{celebration}</p>
 
-        <section className="rounded-[32px] border border-white/10 bg-white/10 p-5 shadow-2xl backdrop-blur">
-          <div className="relative h-64 overflow-hidden rounded-[28px] bg-slate-950/70">
-            <div className="grand-galaxy absolute left-1/2 top-1/2 h-72 w-72 -translate-x-1/2 -translate-y-1/2 rounded-full" />
-            {CONSTELLATION_NODES.map((node) => (
-              <span
-                key={node.id}
-                className="absolute rounded-full bg-kakao-yellow shadow-[0_0_24px_rgba(254,229,0,0.95)]"
+          <div className="relative mx-auto mt-5 h-[132px] w-full max-w-[260px]">
+            <motion.div
+              className="pointer-events-none absolute inset-[-12px] rounded-2xl bg-[radial-gradient(circle_at_50%_48%,rgba(255,230,0,0.45),transparent_65%)]"
+              initial={{ opacity: 0, scale: 0.88 }}
+              animate={{ opacity: [0, 1, 0.35], scale: [0.88, 1.06, 1] }}
+              transition={{ duration: 0.72, ease: "easeOut" }}
+            />
+            <svg viewBox="0 0 100 100" className="relative z-[1] h-full w-full" aria-hidden>
+              {activeNodes.slice(1).map((node, index) => {
+                const previousNode = activeNodes[index];
+                return (
+                  <motion.line
+                    key={`hero-${previousNode.id}-${node.id}`}
+                    x1={previousNode.x}
+                    y1={previousNode.y}
+                    x2={node.x}
+                    y2={node.y}
+                    stroke="rgba(255, 230, 0, 0.55)"
+                    strokeWidth="0.9"
+                    strokeLinecap="round"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: 0.06 + index * 0.055, duration: 0.34 }}
+                  />
+                );
+              })}
+            </svg>
+            {activeNodes.map((node, index) => (
+              <motion.span
+                key={`hero-star-${node.id}`}
+                className="absolute z-[2] rounded-full bg-[#FFE600] shadow-[0_0_18px_rgba(255,230,0,0.65)] ring-2 ring-white"
                 style={{
                   left: `${node.x}%`,
                   top: `${node.y}%`,
-                  width: node.size + 5,
-                  height: node.size + 5,
-                  marginLeft: -(node.size + 5) / 2,
-                  marginTop: -(node.size + 5) / 2,
+                  width: node.size + 4,
+                  height: node.size + 4,
+                  marginLeft: -(node.size + 4) / 2,
+                  marginTop: -(node.size + 4) / 2,
+                }}
+                initial={{ scale: 0, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{
+                  delay: 0.28 + index * 0.045,
+                  type: "spring",
+                  stiffness: 420,
+                  damping: 16,
                 }}
               />
             ))}
           </div>
-        </section>
 
-        <section className="grid grid-cols-2 gap-3">
-          <div className="rounded-3xl border border-white/10 bg-white/10 p-4 backdrop-blur">
-            <p className="text-xs font-bold text-white/55">6개월 총 저축</p>
-            <p className="mt-2 text-2xl font-black">{formatWon(totalPrincipal)}</p>
-          </div>
-          <div className="rounded-3xl border border-white/10 bg-white/10 p-4 backdrop-blur">
-            <p className="text-xs font-bold text-white/55">예상 이자</p>
-            <p className="mt-2 text-2xl font-black">{formatWon(interest)}</p>
-          </div>
-        </section>
-        <p className="text-center text-[11px] leading-relaxed text-white/35">
-          매회 최소 금액 이상 저축 및 우대 조건 충족을 가정한 최대 연 {(MAX_ANNUAL_RATE * 100).toFixed(1)}% 최상 시나리오 · 세전 · 단리 · {PRODUCT_TERM_DAYS}일
-        </p>
-
-        <section className="rounded-[32px] border border-kakao-yellow/35 bg-gradient-to-br from-kakao-yellow via-yellow-200 to-amber-500 p-5 text-kakao-black shadow-[0_24px_70px_rgba(254,229,0,0.28)]">
-          <div className="flex items-center gap-4">
-            <div className="legendary-skin flex h-20 w-20 shrink-0 items-center justify-center rounded-full">
-              <Gift size={34} />
+          <div className="mt-6 grid grid-cols-2 gap-3">
+            <div className="rounded-2xl bg-[#F6F6F6] px-3 py-3 shadow-sm ring-1 ring-black/[0.04]">
+              <p className="text-[10px] font-bold leading-tight text-neutral-400">
+                6개월 총 저축 <span className="text-neutral-300">(세전 원금)</span>
+              </p>
+              <p className="mt-1.5 text-[15px] font-bold leading-none tracking-tight tabular-nums text-neutral-900">
+                <CountUpWon
+                  target={principalPretax}
+                  duration={MATURITY_COUNT_DURATION_MS}
+                  delayMs={MATURITY_COUNT_DELAY_MS}
+                />
+              </p>
             </div>
-            <div>
-              <p className="text-xs font-black uppercase tracking-[0.2em]">Legendary Skin</p>
-              <h2 className="mt-1 text-2xl font-black">전설의 황금 스킨</h2>
-              <p className="mt-1 text-sm font-bold">총 {formatWon(totalAmount)}의 행운을 완성했어요.</p>
-            </div>
-          </div>
-        </section>
-
-        <section className="mt-auto rounded-[32px] border border-white/10 bg-white/95 p-5 text-kakao-black shadow-2xl">
-          <div className="flex items-start gap-3">
-            <div className="rounded-2xl bg-kakao-yellow p-3">
-              <TrendingUp size={24} />
-            </div>
-            <div>
-              <p className="text-xs font-black text-neutral-500">개인화 오퍼</p>
-              <h2 className="mt-1 text-xl font-black">
-                재물운이 상승세인 당신을 위한 소액 투자 제안
-              </h2>
-              <p className="mt-3 text-sm leading-6 text-neutral-600">
-                완성한 저축 루틴을 바탕으로, 매일 1천원부터 시작하는 분산 투자 포트폴리오를 추천해요.
+            <div className="rounded-2xl bg-[#F6F6F6] px-3 py-3 shadow-sm ring-1 ring-black/[0.04]">
+              <p className="text-[10px] font-bold leading-tight text-neutral-400">
+                예상 이자 <span className="text-neutral-300">(세전)</span>
+              </p>
+              <p className="mt-1.5 text-[15px] font-bold leading-none tracking-tight tabular-nums text-neutral-900">
+                <CountUpWon
+                  target={interestPretax}
+                  duration={MATURITY_COUNT_DURATION_MS}
+                  delayMs={MATURITY_COUNT_DELAY_MS}
+                />
               </p>
             </div>
           </div>
+
+          <div className="mt-6 border-t border-neutral-100 pt-5 text-center">
+            <p className="text-[11px] font-bold text-neutral-500">
+              총 완성 금액 <span className="font-bold text-neutral-400">(세전)</span>
+            </p>
+            <p className="mt-1 text-[10px] font-medium text-neutral-400">
+              세후 실수령은 원천징수·과세 조건에 따라 달라져요
+            </p>
+            <p className="mt-4 text-[2.35rem] font-bold leading-none tracking-tight tabular-nums text-[#191919]">
+              <CountUpWon
+                target={totalPretax}
+                duration={MATURITY_COUNT_DURATION_MS}
+                delayMs={MATURITY_COUNT_DELAY_MS}
+              />
+            </p>
+          </div>
+        </div>
+
+        <MaturityKeepsakeCard name={name} totalPretax={totalPretax} />
+
+        <section className="rounded-2xl bg-[#F9F9F9] px-4 py-4 text-[#191919] shadow-sm ring-1 ring-black/[0.06]">
+          <p className="text-xs font-bold text-neutral-500">소액 투자 제안</p>
+          <p className="mt-2 text-sm font-semibold leading-snug text-neutral-700">
+            만기로 만든 저축 습관을 이어가며, 소액부터 다시 불려보세요.
+          </p>
         </section>
+
+        <details className="group rounded-2xl border border-white/12 bg-white/[0.06] px-4 py-3 shadow-sm backdrop-blur-md">
+          <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-bold text-white/90 [&::-webkit-details-marker]:hidden">
+            <span>세전·세후 금액 상세</span>
+            <ChevronDown
+              size={18}
+              className="shrink-0 text-[#FFE600] transition-transform duration-200 group-open:rotate-180"
+            />
+          </summary>
+          <div className="mt-4 space-y-3 border-t border-white/10 pt-4 text-sm text-white/85">
+            <div className="flex justify-between font-semibold">
+              <span className="text-white/50">세전 원금</span>
+              <span className="tabular-nums">{formatWon(principalPretax)}</span>
+            </div>
+            <div className="flex justify-between font-semibold">
+              <span className="text-white/50">세전 이자</span>
+              <span className="tabular-nums text-[#FFE600]">{formatWon(interestPretax)}</span>
+            </div>
+            <div className="flex justify-between border-t border-white/10 pt-3 font-bold">
+              <span className="text-white/60">합계 (세전)</span>
+              <span className="tabular-nums">{formatWon(totalPretax)}</span>
+            </div>
+            <p className="text-[11px] leading-relaxed text-white/45">
+              위 합계는 원금 + 이자가 1원 단위로 맞춰진 세전 기준 금액이에요. 세후 지급액은 원천징수·금융소득 과세 등에 따라 달라질 수 있어요.
+            </p>
+            <p className="text-[11px] leading-relaxed text-white/35">
+              우대 조건 충족 가정 · 최대 연 {(MAX_ANNUAL_RATE * 100).toFixed(1)}% · 단리 · {PRODUCT_TERM_DAYS}
+              일 기준
+            </p>
+          </div>
+        </details>
       </section>
+
+      <div className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-[#070B1E]/95 pb-6 pt-3 backdrop-blur-xl">
+        <div className="mx-auto flex w-full max-w-md flex-col gap-2.5 px-5">
+          <button
+            type="button"
+            onClick={onReinvest}
+            className="w-full rounded-2xl bg-[#FFE600] py-4 text-sm font-bold text-[#191919] shadow-sm transition active:scale-[0.99]"
+          >
+            만기 금액 재투자하기 (증권 연동)
+          </button>
+          <button
+            type="button"
+            onClick={onRestart}
+            className="w-full rounded-2xl border border-white/20 bg-white/5 py-3.5 text-sm font-bold text-white shadow-sm transition active:scale-[0.99]"
+          >
+            새로운 별자리 시작하기
+          </button>
+        </div>
+      </div>
     </motion.main>
   );
 }

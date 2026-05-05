@@ -1,5 +1,11 @@
 /**
- * 별자리 적금 데모용 금융 연산 (단리·일 단위 적립 가정)
+ * 별자리 적금 — 금융 연산 레이어 (PRD 핵심)
+ *
+ * - 적립: 매영업일 동일 금액 적립 가정, 만기 일수 `PRODUCT_TERM_DAYS`(183일).
+ * - 금리: 기본금리 `BASE_ANNUAL_RATE` + 성좌 진행 단계에 따른 우대 구간 `achievedPreferredBonusRate`
+ *   (게이미피케이션과 연동된 「사주 기반 우대」 UX의 수치 표현).
+ * - 만기 예측 `computeRealtimeMaturityPrediction`: 과거·오늘·미래 원금 시나리오 후 단리 이자 합산.
+ * - 세전 금액만 계산; 세후는 UI에서 별도 안내.
  */
 
 /** 상품 만기 일수 — 예측기·안내 문구 공통 기준 */
@@ -38,13 +44,30 @@ export function calcDailySavings(
   dailyAmount: number,
   annualRate: number = MAX_ANNUAL_RATE,
 ) {
-  const principal = dailyAmount * PRODUCT_TERM_DAYS;
+  const principal = Math.round(dailyAmount * PRODUCT_TERM_DAYS);
   const interest = calcInstallmentInterestPretax(
     dailyAmount,
     PRODUCT_TERM_DAYS,
     annualRate,
   );
   return { principal, interest };
+}
+
+export type MaturityBreakdownPretax = {
+  principalPretax: number;
+  interestPretax: number;
+  /** 원 단위: 항상 principalPretax + interestPretax (표시 합계 불일치 방지) */
+  totalPretax: number;
+};
+
+/** 만기 리포트·요약용 세전 원금/이자/합계 (1원 단위 정합 보장) */
+export function calcMaturityBreakdownPretax(
+  dailyAmount: number,
+  annualRate: number = MAX_ANNUAL_RATE,
+): MaturityBreakdownPretax {
+  const { principal, interest } = calcDailySavings(dailyAmount, annualRate);
+  const totalPretax = principal + interest;
+  return { principalPretax: principal, interestPretax: interest, totalPretax };
 }
 
 /** 진행 회차에 따른 경과 일수(균등 매핑, 리텐션·통계용) */
